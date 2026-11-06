@@ -83,6 +83,7 @@ import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
+import logsetup  # noqa: E402
 import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
@@ -5366,6 +5367,8 @@ class Connection:
                 self.distant_traffic.sent.clear()
                 self.distant_traffic_far.sent.clear()
         elif kind == "hello":
+            log.info("game hello: mod %s, protocol %s, format %s%s", msg.get("modVersion") or "?", msg.get("protocol"),
+                     msg.get("format"), "" if msg.get("protocol") == PROTOCOL else f" (this server speaks {PROTOCOL})")
             self.s.check_user_dir(self, msg.get("userPath"))
             lay = self.s.layout
             fmt = msg.get("format", lay.format)
@@ -5551,8 +5554,9 @@ class Connection:
             probe = msg.get("probe")
             if msg.get("enabled") is True and type(probe) is int and 0 <= probe <= 2147483647:
                 self.send({"type": "runtime_profiler_pong", "probe": probe})
-        elif kind == "perf_log":                # the mod's performance log (perflog.lua): its hitches, frame-rate drops,
-            # minute lines and the machine, into this log beside the blocks' own timings (the file players send)
+        elif kind in ("perf_log", "diag_log"):  # the mod's performance log (perflog.lua): its hitches, frame-rate drops,
+            # minute lines and the machine, and its diagnostics (diaglog.lua: the ground's materials, the collision
+            # rebuilds, the wheels' ground), into this log beside the blocks' own timings (the file players send)
             lines = msg.get("lines")
             for line in (lines if isinstance(lines, list) else [])[:PERF_LOG_LINES]:
                 if isinstance(line, str):
@@ -5728,6 +5732,8 @@ class Connection:
             out["baseSize"] = self.s.layout.block * heightmap.SQUARE
         if info.get("ter"):         # the same block as the engine's terrain file (swapped in, no import)
             out["ter"] = f"{self.s.vfs_dir}/{info['ter']}"
+        if info.get("roadsComplete") is False or info.get("surfaceComplete") is False:
+            out["partial"] = True   # built before its map cells (painted again later): the mod's ground line says so
         return out
 
     async def prepare_anchor(self, msg):
@@ -7160,6 +7166,7 @@ class Connection:
 
 
 async def main_async(args):
+    asyncio.get_running_loop().set_exception_handler(logsetup.asyncio_handler(log))   # (unawaited tasks' errors)
     if os.environ.get("BNGE_WORLD_BUNDLE") and (args.roads != "on" or args.grading != "on"):
         from worldbundle import BundleError
         raise BundleError("BNGE_WORLD_BUNDLE requires --roads on --grading on")
@@ -7838,6 +7845,10 @@ def main():
                          f"mod's settings page, else {cachemod.DEFAULT_CAP_GB:g}); least recently used files go, "
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--debug", default=os.environ.get(logsetup.ENV, ""), metavar="AREAS",
+                    help="debug lines for these areas only, comma separated (" + ", ".join(logsetup.DEBUG_AREAS)
+                         + ", or any earthd.<name> logger; 'all' is -v), in the worker processes too "
+                           f"(default ${logsetup.ENV})")
     args = ap.parse_args()
     os.environ["BNE_BRIDGE_PROFILE"] = args.bridge_profile     # read by roads.py here and in the block workers
     args.cells = resolve_cells(args.cells, args.near_visual)
@@ -7850,8 +7861,10 @@ def main():
         ap.error(f"--block {args.block} needs --near-visual mesh (terrain mode is frozen at its layout)")
     if args.horizon and args.near_visual not in MESH_LAYOUT:
         ap.error("--horizon needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    debug_names = logsetup.configure(args.verbose, args.debug)
+    logsetup.install_crash_hooks(log)
+    for line in logsetup.session_lines(args, {a.dest: a.default for a in ap._actions}, debug_names):
+        log.info("%s", line)
     raise_open_files()
     import fast
     try:

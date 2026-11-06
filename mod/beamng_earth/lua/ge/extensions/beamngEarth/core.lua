@@ -109,6 +109,7 @@ local mpsession = require('beamngEarth/mpsession')     -- BeamMP sessions (the p
 local mpanchor = require('beamngEarth/mpanchor')       -- BeamMP: other players' positions into our frame (PR #88)
 local seasonlook = require('beamngEarth/seasonlook')   -- the trees' leaves in the season (hello.season) -- the AI road graph for the stock traffic and AI (map.reset)
 local perflog = require('beamngEarth/perflog')         -- hitches and frame-rate drops into server.log (perflog.lua)
+M._diaglog = require('beamngEarth/diaglog')         -- the ground's materials, collision, the wheels' ground (diaglog.lua)
 
 local LEVEL_ID = 'beamng_earth'
 local MOD_VERSION = '0.4.0'
@@ -397,6 +398,25 @@ local function loadBlock(tr)
   groundcover.afterBlockChange()
   return ok, err
 end
+-- The commit's line for the diagnostics log (diaglog.lua): its method and time, its layers as the engine has them.
+-- (loadBlock wrapped in place, not a new local: core's main chunk is at Lua's 200 locals)
+loadBlock = (function(raw)
+  return function(tr)
+    local diaglog = M._diaglog
+    local sw = stopwatch.new()
+    local ok, err, swapped = raw(tr)
+    local okD, errD = pcall(function()
+      local mats = (type(tr.layers) == 'table' and type(tr.materials) == 'table') and tr.materials or {}
+      local issues = terrain.takeIssues()
+      if not ok then issues[#issues + 1] = 'the block could not be loaded: ' .. tostring(err) end
+      diaglog.blockCommit({ method = swapped and 'swap' or (ok and 'import' or 'failed import'), ms = sw(), cx = tr.cx,
+        cy = tr.cy, partial = tr.partial == true, materials = mats, actual = terrain.slotReport(mats),
+        issues = issues }, st.clock or 0)
+    end)
+    if not okD then log('W', 'beamngEarth', 'diag log: ' .. tostring(errD)) end
+    return ok, err, swapped
+  end
+end)(loadBlock)
 
 -- M1h: in horizon mode LevelInfo.visibleDistance follows the server's radius (+10 %, with
 -- hysteresis, never below VISIBLE_DISTANCE, each change with postApply) and the sky uses the tiles'
@@ -911,6 +931,7 @@ function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
 local function onMessage(msg)
   local t = msg.type
   if t == '_connected' then
+    M._diaglog.newConnection()
     -- sessions: the session folders our far tiles still use (a restarted server keeps them)
     -- slotsHeld: the pooled shape slots our objects hold, if the server is the one that sent them (a reconnect)
     local held
@@ -2056,6 +2077,23 @@ local function perfFrame(ms, hrec)
   for _, l in ipairs(lines) do log('I', 'beamngEarth', l) end
   if net.isConnected() then net.send({ type = 'perf_log', lines = lines }) end
 end
+-- The diagnostics log (diaglog.lua): the wheels asked while driving, its minute line, its lines sent.
+M._diaglog.setContext(function() return perfContext() end)
+M._diaglog.now = function() return st.clock or 0 end
+function M._diagFrame()
+  local diaglog = M._diaglog
+  local p = st.player
+  local mps = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) or 0
+  if diaglog.wantWheels(st.clock, mps) then
+    local veh = getPlayerVehicle and getPlayerVehicle(0)
+    if veh then pcall(veh.queueLuaCommand, veh, diaglog.WHEELS_CMD) end
+  end
+  diaglog.tick(st.clock)
+  local lines = diaglog.drain()
+  if #lines == 0 then return end
+  for _, l in ipairs(lines) do log('I', 'beamngEarth', l) end
+  if net.isConnected() then net.send({ type = 'diag_log', lines = lines }) end
+end
 -- The hitches since the last call: [{ms, at (s), mod = {part = ms}, engine = {subsystem = ms}}].
 function M.hitches()
   local out = hitches
@@ -2095,6 +2133,10 @@ local function onUpdate(dtReal, dtSim)
   if st.inOurLevel and not st.paused then
     local okP, errP = pcall(perfFrame, frameMs0, hrec)
     if not okP then log('W', 'beamngEarth', 'perf log: ' .. tostring(errP)) end
+    if st.active then
+      local okD, errD = pcall(M._diagFrame)
+      if not okD then log('W', 'beamngEarth', 'diag log: ' .. tostring(errD)) end
+    end
   end
   prevMarks, marks = marks, prevMarks
   for k in pairs(marks) do marks[k] = nil end

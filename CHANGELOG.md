@@ -5,6 +5,13 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **More in the logs for finding problems** (docs/LOGGING.md): server.log now starts with what made it (the release,
+  Python, the OS, the machine, the options and switches that differ from the defaults, the mod's version). Rail
+  crossings whose road and track grading disagree, and humps in a road's profile, are logged with their coordinates.
+  The game logs each ground block's surface layers and their ground models, the collision rebuilds, and what the
+  wheels drive on when that changes, so a road that drives like dirt can be traced. `earthd --debug grading,surface`
+  turns on debug lines for those areas only, in the worker processes too, and a crash in any thread is logged with
+  its traceback.
 - **Place search works again, and finds more** (GitHub #602): the map's search no longer depends on one service. It asks
   Wikipedia and Wikidata as you type, Photon while it answers, and OpenStreetMap's Nominatim for streets and house
   numbers when you press Enter. Their answers are ranked together, so "Ganter Bridge", "Ganterbruecke" and
