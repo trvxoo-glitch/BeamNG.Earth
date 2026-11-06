@@ -58,7 +58,8 @@ class ProbeTest(unittest.TestCase):
     def conn(self, info):
         c = earthd.Connection.__new__(earthd.Connection)
         c.s = types.SimpleNamespace(hm={(1, 5, 6): info} if info is not None else {},
-                                    layout=types.SimpleNamespace(block=SIZE))
+                                    layout=types.SimpleNamespace(block=SIZE), surface=None, anchors={},
+                                    road_widths=None)
         return c
 
     def probe(self, info, **over):
@@ -91,11 +92,45 @@ class ProbeTest(unittest.TestCase):
         self.assertNotIn("files say Grass", line)
         self.assertNotIn("built before", line)
 
+    def test_nearest_roads_named_where_the_files_hold_no_asphalt(self):
+        from test_roads import FRAME, features
+        f = features([[(-100.0, 3.0), (100.0, 3.0)]], ["secondary"])
+        c = self.conn({"paint": surface.paint_copy(np.full((SIZE, SIZE), surface.GRASS, np.uint8))})
+        c.s.surface = types.SimpleNamespace(roads=lambda la, lo: ([f], True))
+        c.s.anchors = {1: types.SimpleNamespace(frame=FRAME)}
+        c.loop = types.SimpleNamespace(run_in_executor=lambda ex, fn, *a: fn(*a))      # (inline)
+        old = surface.PAINT_STEP
+        try:
+            surface.PAINT_STEP = 1
+            c.s.hm[(1, 5, 6)]["paint"] = surface.paint_copy(np.full((SIZE, SIZE), surface.GRASS, np.uint8))
+            with self.assertLogs("earthd", logging.INFO) as cm:
+                c.ground_probe({"anchorId": 1, "cx": 5, "cy": 6, "x": 5.0, "y": 6.0, "from": "10", "to": "20"})
+        finally:
+            surface.PAINT_STEP = old
+        text = "\n".join(cm.output)
+        self.assertIn("files say Grass under the car", text)
+        self.assertIn("the nearest mapped roads are secondary", text)
+        self.assertIn("painted into the ground", text)
+
     def test_block_gone_and_bad_message(self):
         self.assertIn("no longer has", self.probe(None))
         self.assertIn("no longer has", self.probe({"paint": None}))
         c = self.conn(None)
         c.ground_probe({"anchorId": "x"})       # (nothing logged, nothing raised)
+
+
+class RoadsNearTest(unittest.TestCase):
+    def test_nearest_roads_and_whether_painted(self):
+        from test_roads import LAT, LON, features
+        f = features([[(-100.0, 0.0), (100.0, 0.0)], [(-100.0, 12.0), (100.0, 12.0)], [(-100.0, 80.0), (100.0, 80.0)]],
+                     ["secondary", "footway", "residential"])
+        got = surface.roads_near([f], LAT, LON)
+        self.assertEqual([c for _d, _i, c, _t in got], ["secondary", "footway"], "within 25 m, nearest first")
+        self.assertLess(got[0][0], 1.0)
+        self.assertIn("painted into the ground", got[0][3])
+        self.assertIn("not painted", got[1][3], "a footway has no road spec")
+        self.assertEqual(surface.roads_near([f], LAT, LON, radius_m=5.0)[0][2], "secondary")
+        self.assertEqual(surface.roads_near([None], LAT, LON), [])
 
 
 class LiveBusyTest(unittest.TestCase):

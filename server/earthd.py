@@ -5743,10 +5743,27 @@ class Connection:
             return
         here, near, asphalt = got
         short = lambda n: n.replace("bngEarthGround", "").replace("beamngEarth", "")      # noqa: E731
+        if (here != surfacemod.MATERIALS[surfacemod.ASPHALT][0] or asphalt < 0.6) and self.s.surface is not None \
+                and self.s.anchors.get(key[0]) is not None:
+            self.loop.run_in_executor(None, self._probe_roads, self.s.anchors[key[0]].frame, x, y, what)
         log.info("ground files: %s: the block's files say %s under the car; within 4 m %s (%.0f %% asphalt)%s", what,
                  short(here), ", ".join(f"{short(k)} {v}" for k, v in sorted(near.items(), key=lambda kv: -kv[1])),
                  100 * asphalt, "; the block was built before its map cells" if info.get("roadsComplete") is False
                  or info.get("surfaceComplete") is False else "")
+
+    def _probe_roads(self, frame, x, y, what):
+        """ground_probe's second line (a worker thread): the mapped roads nearest the car, and whether each is painted
+        into the ground, where the block's files hold no asphalt under it."""
+        try:
+            la, lo, _ = frame.enu_to_geodetic(np.array([x]), np.array([y]), np.zeros(1))
+            lat, lon = float(la[0]), float(lo[0])
+            feats, complete = self.s.surface.roads(la, lo)
+            near = surfacemod.roads_near(feats, lat, lon, widths=self.s.road_widths)
+            log.info("ground files: %s: at %.5f,%.5f the nearest mapped roads are %s%s", what, lat, lon,
+                     "; ".join(f"{c} {i[:8]} {d:.0f} m away, {t}" for d, i, c, t in near) or "none within 25 m",
+                     "" if complete else " (some road cells not loaded yet)")
+        except Exception as e:      # (diagnostics only)
+            log.debug("ground files: roads near: %s: %s", type(e).__name__, e)
 
     def terrain_msg(self, key, info):
         out = {"cx": key[1], "cy": key[2], "heightmap": self.s.hm_vfs(key), "size": self.s.layout.block,
