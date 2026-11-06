@@ -5704,7 +5704,8 @@ class Connection:
         self.send(await self.loop.run_in_executor(None, app_paths_message, self.s.cache_dir, result))
 
     def on_cache(self, msg):
-        """The settings page: capGb sets the cap (0 = unlimited), clear: true empties the cache (but this
+        """The settings page: capGb sets the cap (0 = unlimited), autoClear false stops the cache deleting by itself
+        (over the cap, or to keep the drive's room free; only Clear cache deletes then), clear: true empties the cache (but this
         session's files and the gravity model) on an executor; every 'cache' gets the usage back (after a
         clear, with clearedBytes). Without a Cache (Server()'s default): ignored."""
         cache = self.s.cache
@@ -5716,6 +5717,13 @@ class Connection:
                 raise ValueError(f"capGb {cap!r}: a number")
             if cache.set_cap(cap):
                 log.info("cache: cap %s (from the mod)", f"{cap:g} GB" if cap else "unlimited")
+        auto = msg.get("autoClear")
+        if auto is not None:
+            if not isinstance(auto, bool):
+                raise ValueError(f"autoClear {auto!r}: true or false")
+            if cache.auto_clear != auto:
+                cache.auto_clear = auto
+                log.info("cache: clearing by itself %s (from the mod)", "on" if auto else "off")
         if msg.get("clear") is True:
             async def run():
                 _, freed = await self.loop.run_in_executor(None, cache.clear)

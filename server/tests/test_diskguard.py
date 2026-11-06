@@ -92,6 +92,14 @@ class CacheGuardTest(unittest.TestCase):
         self.assertEqual(g.check(), [])             # fine now: nothing more goes
         self.assertEqual(len(self.left()), 7)
 
+    def test_auto_clear_off_only_warns(self):
+        self.cache.auto_clear = False
+        g, _ = self.guard(3 * self.MB)
+        with self.assertLogs("earthd.disk", "WARNING"):
+            reps = g.check()
+        self.assertEqual(len(self.left()), 10)
+        self.assertEqual(reps[0]["freedBytes"], 0)
+
     def test_plenty_free_touches_nothing(self):
         g, _ = self.guard(100 * self.MB)
         self.assertEqual(g.check(), [])

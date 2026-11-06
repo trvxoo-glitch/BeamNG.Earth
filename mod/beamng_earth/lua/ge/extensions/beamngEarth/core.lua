@@ -980,6 +980,7 @@ local function onMessage(msg)
     cacheInfo = nil
     local settings = rawget(_G, 'beamngEarth_settings')
     if settings and settings.cacheCapGb then net.send({ type = 'cache', capGb = settings.cacheCapGb() }) end
+    if settings and settings.cacheAutoClear then net.send({ type = 'cache', autoClear = settings.cacheAutoClear() }) end
     -- gas stations on, after every hello (a server started without them too; this comes before any tile request)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
@@ -2705,6 +2706,11 @@ local function cacheReady() return net.isConnected() and st.sessionId ~= nil end
 function M.cacheSetCap(gb)
   if not cacheReady() then return false end
   net.send({ type = 'cache', capGb = gb })
+  return true
+end
+function M.cacheSetAutoClear(on)
+  if not cacheReady() then return false end
+  net.send({ type = 'cache', autoClear = on and true or false })
   return true
 end
 function M.cacheClear()
