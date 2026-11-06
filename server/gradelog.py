@@ -95,8 +95,8 @@ def _seg_cross(a0, a1, b0, b1):
 
 
 def crossings(roads, rails):
-    """[(road fid, rail fid, x, y, road z, rail z, i, t)] where a road plan's polyline crosses a railway plan's (i, t:
-    the road's segment and the share along it). roads / rails: [(fid, xy (k, 2), z (k,))]. Pure; bounding boxes
+    """[(road fid, rail fid, x, y, road z, rail z, i, t, road xy)] where a road plan's polyline crosses a railway plan's
+    (i, t: the road's segment and the share along it; road xy: that piece's vertices: a road in pieces has one fid). roads / rails: [(fid, xy (k, 2), z (k,))]. Pure; bounding boxes
     first (a city cell has ~1000 road plans and a few rail ones)."""
     out = []
     rb = []
@@ -128,7 +128,7 @@ def crossings(roads, rails):
                     t, u = hit
                     p = a0 + t * (a1 - a0)
                     out.append((fid, rfid, float(p[0]), float(p[1]), float(z[i] + t * (z[i + 1] - z[i])),
-                                float(rz[j] + u * (rz[j + 1] - rz[j])), i, float(t)))
+                                float(rz[j] + u * (rz[j + 1] - rz[j])), i, float(t), xy))
     return out
 
 
@@ -185,9 +185,8 @@ def _report(key, plans, to_ll, base_fn, grade_fn, logger, info=logging.INFO):
                                                               np.asarray(z, np.float64)))
     debug = logger.isEnabledFor(logging.DEBUG)
     out = {"crossings": 0, "steps": 0, "humps": 0}
-    by_fid = {fid: xy for fid, xy, _z in roads}
     seen = set()
-    for fid, rfid, x, y, zr, zt, i, t in crossings(roads, rails):
+    for fid, rfid, x, y, zr, zt, i, t, rxy in crossings(roads, rails):
         k = (fid, rfid, round(x), round(y))
         if k in seen:           # (a road's plan split in pieces meets the track once)
             continue
@@ -198,7 +197,7 @@ def _report(key, plans, to_ll, base_fn, grade_fn, logger, info=logging.INFO):
         hump = None
         if base_fn is not None and grade_fn is not None:    # (a few crossings a cell: ~20 points each)
             try:
-                sa, pts = across(by_fid[fid], i, t)
+                sa, pts = across(rxy, i, t)
                 base = np.asarray(base_fn(pts[:, 0], pts[:, 1]), np.float64).reshape(-1)
                 zg = np.asarray(grade_fn(pts[:, 0], pts[:, 1], base), np.float64).reshape(-1)
                 h, _k = humps(sa, zg)

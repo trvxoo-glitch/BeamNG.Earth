@@ -2414,7 +2414,9 @@ class Server:
             return True
         for c in list(self.connections):
             counts = getattr(c, "progress_sent", None)
-            if counts and any(d < w for d, w in counts):
+            # (the first four: ground, roads, trees, far as (done, wanted); the fifth is the network's three numbers,
+            # which raised "too many values to unpack" here and stopped the saved areas' downloads: 4 times in a run)
+            if counts and any(c_[0] < c_[1] for c_ in counts[:4]):
                 return True
         return False
 
@@ -2977,6 +2979,8 @@ class Server:
             info["roadsComplete"] = roads_complete
         if not provisional:
             idx = self._tunnel_holes(anchor, elev, keep, cx, cy, idx, info)
+        if idx is not None:
+            info["paint"] = surfacemod.paint_copy(idx)      # (ground_probe: what this block says under the car)
         info["ter"], mats = surfacemod.write_ter(self.out_dir, self.ter_name((anchor.id, cx, cy)), keep["qgrid"], idx)
         if mats is not None:          # the .ter's own material list (MATERIALS indices)
             info["mats"] = mats
@@ -5554,6 +5558,8 @@ class Connection:
             probe = msg.get("probe")
             if msg.get("enabled") is True and type(probe) is int and 0 <= probe <= 2147483647:
                 self.send({"type": "runtime_profiler_pong", "probe": probe})
+        elif kind == "ground_probe":            # the mod's wheels changed ground (diaglog.lua): what the block's own
+            self.ground_probe(msg)              # files say under the car, to tell a wrong file from a wrong swap
         elif kind in ("perf_log", "diag_log"):  # the mod's performance log (perflog.lua): its hitches, frame-rate drops,
             # minute lines and the machine, and its diagnostics (diaglog.lua: the ground's materials, the collision
             # rebuilds, the wheels' ground), into this log beside the blocks' own timings (the file players send)
@@ -5717,6 +5723,30 @@ class Connection:
                 last[0] = now
                 self.loop.call_soon_threadsafe(self.status, f"Elevation tiles {done}/{total}")
         return progress
+
+    def ground_probe(self, msg):
+        """Log what the block's materials (as written to its files) say under the car where its tyres changed ground:
+        msg {anchorId, cx, cy, x, y, from, to}. A block the mod says it has but the server no longer has: said so."""
+        try:
+            key = (int(msg["anchorId"]), int(msg["cx"]), int(msg["cy"]))
+            x, y = float(msg["x"]), float(msg["y"])
+        except (KeyError, TypeError, ValueError):
+            return
+        info = self.s.hm.get(key)
+        what = f"ground {msg.get('from')} -> {msg.get('to')} at block {key[1]},{key[2]} ({x:.0f}, {y:.0f})"
+        if info is None or info.get("paint") is None:
+            log.info("ground files: %s: the server no longer has that block's materials", what)
+            return
+        got = surfacemod.paint_at(info["paint"], self.s.layout.block, key[1], key[2], x, y)
+        if got is None:
+            log.info("ground files: %s: off the block's ground or in a hole", what)
+            return
+        here, near, asphalt = got
+        short = lambda n: n.replace("bngEarthGround", "").replace("beamngEarth", "")      # noqa: E731
+        log.info("ground files: %s: the block's files say %s under the car; within 4 m %s (%.0f %% asphalt)%s", what,
+                 short(here), ", ".join(f"{short(k)} {v}" for k, v in sorted(near.items(), key=lambda kv: -kv[1])),
+                 100 * asphalt, "; the block was built before its map cells" if info.get("roadsComplete") is False
+                 or info.get("surfaceComplete") is False else "")
 
     def terrain_msg(self, key, info):
         out = {"cx": key[1], "cy": key[2], "heightmap": self.s.hm_vfs(key), "size": self.s.layout.block,

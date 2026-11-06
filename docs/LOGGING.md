@@ -127,6 +127,7 @@ game: ground minute (60s): blocks 14 (12 swaps, 2 imports, 1 partial, slowest 31
   commit and the last collision rebuild show whether the change came right after a block swap (the block's layers)
   or not (the paint under that spot). A game whose vehicle Lua has no such fields logs `ground probe off` once and
   stops asking.
+- **`ground files`** (server): when the wheels change ground, the server says what the block's own files hold under the car (the material there and within 4 m, the asphalt share). Grass under a road means the server wrote the block wrong. Asphalt means the game applied it wrong (the swap).
 - **`ground minute`**: block commits, collision rebuilds (be:reloadCollision from roads.lua: how many, the slowest,
   the longest gap between two) and the wheels' ground ids by share of the samples.
 

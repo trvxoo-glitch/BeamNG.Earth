@@ -145,6 +145,9 @@ MOD_TO_SERVER = {
     "perf_log": {"lines": F((list, dict))},
     # the mod's diagnostics (diaglog.lua; additive): the ground's materials, collision rebuilds, the wheels' ground
     "diag_log": {"lines": F((list, dict))},
+    # what the block's files say under the car where its tyres changed ground (diaglog.lua; Connection.ground_probe)
+    "ground_probe": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "x": F(NUM), "y": F(NUM),
+                     "from": F(str, OPT), "to": F(str, OPT)},
     # BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our
     # anchor ({id, host, port, code, weight} each). (Commented out 2026-10-27: shared world building is off.)
     # "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)

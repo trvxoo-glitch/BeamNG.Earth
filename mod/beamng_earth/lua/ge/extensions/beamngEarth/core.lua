@@ -2089,6 +2089,13 @@ function M._diagFrame()
     if veh then pcall(veh.queueLuaCommand, veh, diaglog.WHEELS_CMD) end
   end
   diaglog.tick(st.clock)
+  local probes = diaglog.takeProbes()
+  if #probes > 0 and st.block and p and net.isConnected() then
+    for _, pr in ipairs(probes) do      -- (what the block's files hold where the tyres changed ground)
+      net.send({ type = 'ground_probe', anchorId = st.anchorId, cx = st.block.cx, cy = st.block.cy, x = p.x, y = p.y,
+        from = pr.from, to = pr.to })
+    end
+  end
   local lines = diaglog.drain()
   if #lines == 0 then return end
   for _, l in ipairs(lines) do log('I', 'beamngEarth', l) end

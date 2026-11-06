@@ -30,6 +30,7 @@ M.MAX_QUEUE = 40            -- lines kept for the server at most (the oldest go)
 M.MAX_MATERIALS = 16        -- layers named in a ground block line at most
 
 local q = {}                -- lines not yet taken (M.drain)
+local probes = {}           -- { from, to } ground changes for the server's ground_probe (M.takeProbes)
 local sumAt, blocks, rebuilds, wheelN, wheelBy
 local lastBlockAt, lastRebuildAt, lastSig, firstBlock
 local wheelAt, wheelLast, wheelLineAt, wheelSkipped, wheelOff
@@ -40,6 +41,7 @@ local function r1(v) return math.floor(v * 10 + 0.5) / 10 end
 
 function M.reset()
   q = {}
+  probes = {}
   sumAt = nil
   blocks = { n = 0, swap = 0, import = 0, slowMs = 0, partial = 0 }
   rebuilds = { n = 0, slowMs = 0, gapMs = 0, urgent = 0 }
@@ -51,6 +53,14 @@ M.reset()
 
 -- A new connection: its first block gets its line again (the server's log is a new file after a restart).
 function M.newConnection() firstBlock = true; lastSig = nil end
+
+-- The ground changes since the last call, { from = '10', to = '20' } each: core.lua sends them with the car's place and
+-- block for the server to say what the block's files hold there (ground_probe).
+function M.takeProbes()
+  local out = probes
+  probes = {}
+  return out
+end
 
 -- The caller's context for the lines: ctx() -> {lat, lon, mph, block = 'cx,cy'} (core's perfContext).
 function M.setContext(fn) ctxFn = fn end
@@ -200,6 +210,7 @@ function M.onWheels(vid, text, now)
   wheelLineAt = now
   local more = wheelSkipped > 0 and string.format(' (+%d changes since the last line)', wheelSkipped) or ''
   wheelSkipped = 0
+  if #probes < 4 then probes[#probes + 1] = { from = from, to = summary } end
   push(string.format('wheels: ground %s -> %s %s; last block commit %s, last collision rebuild %s; wheels %s%s',
     from, summary, where(), ago(now, lastBlockAt), ago(now, lastRebuildAt), text, more))
 end

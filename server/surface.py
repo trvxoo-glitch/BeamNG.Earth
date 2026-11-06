@@ -1456,6 +1456,42 @@ def used_materials(idx):
     return sorted(u) or [DIRT]
 
 
+PAINT_STEP = 4          # the kept copy of a block's materials: every PAINT_STEP-th sample (a 1024 block: 64 KB)
+
+
+def paint_copy(idx):
+    """A small copy of a block's MATERIALS indices (row 0 = south, as write_ter takes them) kept for ground_probe: what
+    the files said under the car when its tyres changed ground. None without surface layers. Pure."""
+    if idx is None:
+        return None
+    return np.ascontiguousarray(np.asarray(idx, np.uint8)[::PAINT_STEP, ::PAINT_STEP])
+
+
+def paint_at(grid, size, cx, cy, x, y, square=heightmap.SQUARE, radius_m=4.0):
+    """(name of the material at world (x, y), {name: samples} within radius_m round it, share of asphalt within it) of a
+    paint_copy grid of a size² block centred at (cx, cy); None when (x, y) is off the block or on a hole. Pure."""
+    grid = np.asarray(grid)
+    half = size * square / 2
+    step = PAINT_STEP * square
+    fx, fy = (x - (cx - half)) / step, (y - (cy - half)) / step
+    n = grid.shape[0]
+    if not (0 <= fx < n and 0 <= fy < grid.shape[1]):
+        return None
+    ix, iy = int(fx), int(fy)
+    r = max(1, int(math.ceil(radius_m / step)))
+    win = grid[max(0, iy - r):iy + r + 1, max(0, ix - r):ix + r + 1]
+    names = {}
+    for v, c in zip(*np.unique(win, return_counts=True)):
+        v = int(v)
+        if v != heightmap.TER_HOLE and v < len(MATERIALS):
+            names[MATERIALS[v][0]] = int(c)
+    here = int(grid[iy, ix])
+    if here == heightmap.TER_HOLE or here >= len(MATERIALS):
+        return None
+    total = sum(names.values()) or 1
+    return MATERIALS[here][0], names, names.get(MATERIALS[ASPHALT][0], 0) / total
+
+
 def write_ter(out_dir, name, qgrid, idx):
     """The block's .ter (heightmap.write_ter) with the materials its samples use (idx: MATERIALS indices, row
     0 = south; used_materials) or, idx None, the level's single dirt layer (the mod's terrain.MATERIAL).

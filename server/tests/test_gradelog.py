@@ -56,7 +56,7 @@ class CrossingTest(unittest.TestCase):
     def test_crossing_point_and_heights(self):
         road = ("r1", np.array([(-50.0, 0.0), (50.0, 0.0)]), np.array([10.0, 12.0]))
         rail = ("rail:t1", np.array([(0.0, -50.0), (0.0, 50.0)]), np.array([11.5, 11.5]))
-        (fid, rfid, x, y, zr, zt, i, t), = gradelog.crossings([road], [rail])
+        (fid, rfid, x, y, zr, zt, i, t, rxy), = gradelog.crossings([road], [rail])
         self.assertEqual((fid, rfid), ("r1", "rail:t1"))
         self.assertAlmostEqual(x, 0.0)
         self.assertAlmostEqual(y, 0.0)
@@ -64,6 +64,7 @@ class CrossingTest(unittest.TestCase):
         self.assertAlmostEqual(zt, 11.5)
         self.assertEqual(i, 0)
         self.assertAlmostEqual(t, 0.5)
+        self.assertEqual(len(rxy), 2)
 
     def test_parallel_and_apart_do_not_cross(self):
         road = ("r1", np.array([(-50.0, 0.0), (50.0, 0.0)]), np.zeros(2))
@@ -135,6 +136,19 @@ class ReportTest(unittest.TestCase):
             finally:
                 lg.setLevel(logging.NOTSET)
         self.assertFalse([m for m in cm.output if m.startswith("INFO")], "quiet: the plan cache's cells at DEBUG")
+
+    def test_a_road_in_pieces_sharing_one_id(self):
+        """Two plans of one feature (a road cut at a cell's edge): the crossing's profile is read from its own piece
+        (the field's IndexError: the longer piece's index into the shorter one's vertices)."""
+        x = np.linspace(-100, 100, 101)
+        short = P(np.c_[np.linspace(300, 320, 2), [0, 0]], [10, 10])
+        long_ = P(np.c_[x, 0 * x], np.full(101, 10.0))
+        plans = [("road1", long_), ("road1", short), ("rail:t", P([(60.0, -50.0), (60.0, 50.0)], [10.6, 10.6]))]
+        with self.assertLogs("earthd.grading", logging.INFO) as cm:
+            gradelog.report_cell("k", plans, to_ll, lambda e, n: np.full(len(e), 10.0), lambda e, n, b: b)
+        line, = [m for m in cm.output if "rail crossing" in m]
+        self.assertNotIn("unavailable", line)
+        self.assertIn("graded", line)
 
     def test_humps_capped_per_cell(self):
         x = np.linspace(0, 200, 101)
