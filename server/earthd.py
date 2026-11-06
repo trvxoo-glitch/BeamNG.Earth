@@ -84,6 +84,7 @@ from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
 import cache as cachemod  # noqa: E402
+import diskguard as diskguardmod  # noqa: E402
 import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
 import credits as creditsmod  # noqa: E402
@@ -504,6 +505,13 @@ GEO_LIST_BATCH_S = 1.0          # geo_dropped: tiles whose grace ends within thi
 GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
+
+
+def disk_low_message(rep):
+    """The 'disk_low' message (core.lua shows it): a drive the server writes to is nearly full (diskguard.py)."""
+    return {"type": "disk_low", "path": rep["path"], "cache": "cache" in rep["labels"],
+            "session": "session" in rep["labels"], "freeBytes": rep["freeBytes"], "reserveBytes": rep["reserveBytes"],
+            "freedBytes": rep["freedBytes"]}
 # Live retexture (--colormatch / --deshadow): when a region a shown tile was rendered without becomes
 # ready, the tile's texture is rendered again under its next revision's name and the mod is told
 # (far_retex) to point the tile's material at it. At most RETEX_INFLIGHT such renders on the tile pool
@@ -1070,6 +1078,7 @@ class Server:
         self.grader_lock = threading.Lock()
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
+        self.disk_guard = None          # the drives' free space (diskguard.DiskGuard; main_async)
         self.covermap = None            # the map's cache view (covermap.CoverMap; main_async, with a Cache)
         self.areas = None               # saved areas downloaded ahead (areas.Areas; main_async, with a Cache)
         if cache is not None:
@@ -1247,6 +1256,16 @@ class Server:
         for c in self.connections:
             out |= c.sessions
         return out
+
+    def disk_reports(self):
+        """The drives short of free space now (diskguard.DiskGuard.reports), [] without a guard."""
+        guard = getattr(self, "disk_guard", None)
+        return guard.reports() if guard is not None else []
+
+    def disk_check(self):
+        """One pass of the free-space guard (a worker thread): the drives that went short this pass."""
+        guard = getattr(self, "disk_guard", None)
+        return guard.check() if guard is not None else []
 
     def check_user_dir(self, conn, game_path):
         """The game's own user folder (hello.userPath) against the one this server writes into: a game whose user
@@ -5468,6 +5487,8 @@ class Connection:
                 self.status(self.last_status)
             if self.s.cache is not None:            # the download cache's usage (the settings page)
                 self.send(self.s.cache.message())
+            for rep in self.s.disk_reports():       # a drive nearly full (diskguard.py): this game is told too
+                self.send(disk_low_message(rep))
             if self.s.areas is not None:            # the saved areas (the map's Places panel)
                 self.send(self.s.areas_message())
             if self.s.update_check:
@@ -7406,6 +7427,21 @@ async def main_async(args):
             except Exception:           # a file-system error must not stop the sweeps (or the server)
                 log.exception("session sweep failed")
     sweeper = asyncio.create_task(sessions())
+
+    # the drives' free space (diskguard.py): the cache gives room back before a drive fills, the player is told when it
+    # cannot (a 20 GB cache cap on a drive with less free, the session folder on a full C:)
+    server.disk_guard = diskguardmod.DiskGuard({"cache": args.cache_dir, "session": server.out_dir}, disk)
+
+    async def disk_watch():
+        while True:
+            try:
+                for rep in await asyncio.get_running_loop().run_in_executor(None, server.disk_check):
+                    for c in list(server.connections):
+                        c.send(disk_low_message(rep))
+            except Exception:           # never the server
+                log.exception("disk check failed")
+            await asyncio.sleep(diskguardmod.CHECK_S)
+    disk_watcher = asyncio.create_task(disk_watch())
     map_srv = None
     if getattr(args, "map_tiles", "on") == "on" and server.imagery is not None:
         try:                        # the world map's tiles, 127.0.0.1 only (a failure only loses the map)
@@ -7441,6 +7477,7 @@ async def main_async(args):
         ticker.cancel()
         lagger.cancel()
         sweeper.cancel()
+        disk_watcher.cancel()
         if map_srv is not None:
             map_srv.close()
         if server.areas is not None:

@@ -1055,6 +1055,16 @@ local function onMessage(msg)
       msg = 'BeamNG.Earth is writing the world to a different BeamNG user folder than the game uses, so the map '
         .. 'cannot load. Close the game and BeamNG.Earth and start BeamNG.Earth again: it will use the game\'s folder '
         .. '(' .. tostring(msg.game) .. ').' })
+  elseif t == 'disk_low' then           -- a drive the world server writes to is nearly full (server diskguard.py)
+    st.diskLow = msg
+    local gb = function(b) return string.format('%.1f GB', (tonumber(b) or 0) / 1e9) end
+    log('W', 'beamngEarth', 'only ' .. gb(msg.freeBytes) .. ' free on the drive of ' .. tostring(msg.path))
+    local what = msg.session and 'the game\'s folder' or 'BeamNG.Earth\'s download cache'
+    local fix = ((tonumber(msg.freedBytes) or 0) > 0 and (' BeamNG.Earth deleted ' .. gb(msg.freedBytes)
+      .. ' of old downloads to make room, but that was not enough.') or '') .. ' Free some space on that drive.'
+    guihooks.trigger('Message', { ttl = 30, category = 'bngEarthDiskLow', icon = 'warning',
+      msg = 'Your drive is nearly full: ' .. gb(msg.freeBytes) .. ' left on the drive with ' .. what .. ' ('
+        .. tostring(msg.path) .. '). When it fills, the world stops loading.' .. fix })
   elseif t == 'load_progress' then      -- the loading line's counts (server Connection.send_progress)
     st.loadProgress = msg
   elseif t == 'share_info' then        -- BeamMP shared generation v2: our share code and weight (mpsession poses)

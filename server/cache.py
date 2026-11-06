@@ -472,6 +472,15 @@ class Cache(NoCache):
                      _gb(self._used), _gb(cap) if cap else "unlimited")
         return n, b
 
+    def free_space(self, nbytes):
+        """The drive is nearly full (diskguard.py): give back nbytes, least recently used files first, whatever the cap
+        (also an unlimited one). The files evict() never removes stay (this run's place, saved areas, gravity/).
+        Returns the bytes removed (0 before the start-up walk is done or when the cache is not ours)."""
+        if nbytes <= 0 or not self.managed or not self.ready:
+            return 0
+        _n, b = self.evict(target=max(0, self._used - int(nbytes)))
+        return b
+
     def _unpinned(self, items, key_of):
         """items without the ones whose key is in a saved area (pinned; outside the lock: a batch call)."""
         pinned = self.pinned

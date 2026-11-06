@@ -302,6 +302,9 @@ SERVER_TO_MOD = {
     # the loading line's counts (Connection.send_progress, the mod's loadprogress.lua): [done, wanted] each
     # the server writes where the game does not look (Server.check_user_dir, GitHub #770)
     "user_dir_mismatch": {"game": F(str), "server": F(str)},
+    # a drive the server writes to is nearly full (diskguard.py; earthd.disk_low_message)
+    "disk_low": {"path": F(str), "cache": F(bool), "session": F(bool), "freeBytes": F(int), "reserveBytes": F(int),
+                 "freedBytes": F(int)},
     "load_progress": {"anchorId": F(int), "ground": F(list), "roads": F(list), "trees": F(list), "far": F(list),
                       "net": F(list)},     # (the downloads in flight: loadprogress.downloadText)
     # road tiles near the player (roads.py; additive, with map data only): a JSON file of DecalRoad chunks
@@ -376,6 +379,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
                        "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
                        "user_dir_mismatch",                          # another user folder than the game's (test_user_dir)
+                       "disk_low",                                   # a nearly full drive (test_diskguard)
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data
