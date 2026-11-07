@@ -131,5 +131,104 @@ class CrashHooksTest(unittest.TestCase):
         self.assertIn("plain", cm.output[1])
 
 
+class CrashFileTest(unittest.TestCase):
+    """A native crash's dump in the process's own file, put into the log with which process and which thread."""
+
+    def run_child(self, d, code):
+        import subprocess
+        env = dict(os.environ, BNGE_LOG_DIR=d)
+        here = os.path.join(os.path.dirname(__file__), "..")
+        return subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import logsetup; "
+                               "logsetup.install_crash_hooks(role='blockworker'); %s" % (here, code)],
+                              env=env, capture_output=True, timeout=60)
+
+    def test_a_crash_is_named(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = self.run_child(d, "import faulthandler; faulthandler._sigsegv()")
+            self.assertNotEqual(p.returncode, 0)
+            files = [f for f in os.listdir(d) if f.startswith("crash-blockworker-")]
+            self.assertEqual(len(files), 1, os.listdir(d))
+            with self.assertLogs("earthd", logging.CRITICAL) as cm:
+                heads = logsetup.sweep_crashes(d)
+            self.assertEqual(len(heads), 1)
+            self.assertIn("process blockworker pid", heads[0])
+            self.assertIn("Python thread", heads[0], "the faulting thread was Python's here")
+            self.assertIn("Current thread", cm.output[0])
+            self.assertEqual(os.listdir(d), [], "read once")
+
+    def test_normal_exit_leaves_nothing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = self.run_child(d, "pass")
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(os.listdir(d), [])
+
+    def test_native_thread_crash_text(self):
+        text = ("process server pid 9 started x\nWindows fatal exception: access violation\n\n"
+                "Thread 0x01 (most recent call first):\n  File \"a.py\", line 1 in f\n\n"
+                "Thread 0x02 (most recent call first):\n  File \"b.py\", line 2 in g\n")
+        head, dump = logsetup.read_crash(text)
+        self.assertIn("access violation", head)
+        self.assertIn("outside Python", head)
+        self.assertIn("(2 Python threads)", head)
+        self.assertIsNone(logsetup.read_crash("process server pid 9 started x\n"))
+
+
+class RateCapTest(unittest.TestCase):
+    def test_one_logger_capped_others_not(self):
+        import io
+        out = io.StringIO()
+        h = logging.StreamHandler(out)
+        h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        t = [0.0]
+        h.addFilter(logsetup.RateCap(h, per_min=5, debug_per_min=50, clock=lambda: t[0]))
+        lg, other = logging.getLogger("earthd.capflood"), logging.getLogger("earthd.capquiet")
+        lg.addHandler(h)
+        other.addHandler(h)
+        lg.propagate = other.propagate = False
+        lg.setLevel(logging.INFO)
+        other.setLevel(logging.INFO)
+        try:
+            for i in range(20):
+                lg.info("line %d", i)
+            lg.warning("a warning always")
+            other.info("another area")
+            t[0] = 61.0
+            lg.info("next minute")
+        finally:
+            for x in (lg, other):
+                x.removeHandler(h)
+                x.propagate = True
+                x.setLevel(logging.NOTSET)
+        text = out.getvalue()
+        self.assertEqual(text.count("INFO earthd.capflood: line"), 5)
+        self.assertIn("a warning always", text)
+        self.assertIn("another area", text)
+        self.assertIn("log cap: earthd.capflood held back 15 lines", text)
+        self.assertLess(text.index("held back"), text.index("next minute"))
+
+    def test_off_switch(self):
+        with mock.patch.dict(os.environ, {logsetup.CAP_ENV: "0"}):
+            self.assertEqual(logsetup.cap_handlers(logging.getLogger("earthd.nocap")), 0)
+
+
+class FallbackTest(unittest.TestCase):
+    def test_first_info_then_debug_and_counted(self):
+        lg = logging.getLogger("earthd.fbtest")
+        lg.setLevel(logging.DEBUG)
+        try:
+            with self.assertLogs("earthd.fbtest", logging.DEBUG) as cm:
+                for _ in range(3):
+                    logsetup.fallback(lg, "a cell unreadable", OSError("gone"))
+        finally:
+            lg.setLevel(logging.NOTSET)
+        self.assertTrue(cm.output[0].startswith("INFO") and "OSError: gone" in cm.output[0])
+        self.assertTrue(all(m.startswith("DEBUG") for m in cm.output[1:]))
+        self.assertIn("earthd.fbtest a cell unreadable 3x", logsetup.fallback_summary())
+        logsetup.fallback("earthd.fbtest", "by name", None)       # a logger's name works too, and never raises
+        logsetup.fallback(None, None, None)
+
+
 if __name__ == "__main__":
     unittest.main()

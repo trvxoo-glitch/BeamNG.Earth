@@ -297,6 +297,7 @@ TRASH_DIR = "trash"         # in the cache: folders of the game's user folder mo
 PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_progress)
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
 PERF_LOG_LINES, PERF_LOG_CHARS = 40, 2000   # a perf_log message's lines and characters a line, at most
+MOD_LOG_LEVELS = {"W": logging.WARNING, "E": logging.ERROR, "D": logging.INFO}    # (a D line: asked for, so shown)
 SLOW_BASE_S = 3.0               # a base photo slower than this is logged with its stages
 BASE_RENDER_PX = 1024           # detail mode: the block's base photo as the imagery renders it (the 1 km block: 1 m a
                                 # texel; USGS is ~1.9 m, NAIP 0.6 m)
@@ -351,6 +352,7 @@ TILE_CACHE = {32: 6000, 64: 2500}
 HM_THREADS = 4
 HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they wait on its block process)
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
+CRASH_SWEEP_S = 20        # how often the worker processes' crash files are read (logsetup.sweep_crashes)
 FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40, 10, 0.3, 5   # (fin_worker_worth)
 FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
 NAV_LEAD_S, NAV_LEAD_MAX_M = 12.0, 500.0     # the nav graph's centre ahead of a moving car (navgraph.WINDOW_M 1100)
@@ -2855,7 +2857,8 @@ class Server:
         if early is not None:
             try:
                 info["base"] = early.result(timeout=STANDIN_WAIT_S)
-            except Exception:
+            except Exception as e:
+                logsetup.fallback(log, "a block's early base failed or was late: none", e)
                 info["base"] = None
             if not info.get("base"):
                 self.quick_pool.submit(self._quick_later, anchor, cx, cy)
@@ -3272,7 +3275,8 @@ class Server:
         terrain_ready answers) and to the mod (block_base: the block in use takes it now, a ready one at its commit)."""
         try:
             name, photo, _ = fut.result()
-        except Exception:
+        except Exception as e:
+            logsetup.fallback(log, "a block's base photo failed: not sent", e)
             return
         conns = [c for c in list(self.connections) if getattr(c, "loop", None) is not None]
         if not name or not conns:
@@ -5385,6 +5389,8 @@ class Connection:
                  "runtimeProfiler": 2, "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
                  "sessionId": self.s.sid, "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
+            if os.environ.get(logsetup.ENV):     # the server's debug areas: the mod's D lines of those (modlog.setDebug)
+                m["debug"] = os.environ[logsetup.ENV]
             if self.s.imagery is not None:      # the world map credits the sources its view shows
                 m["imageryCredits"] = self.s.imagery.credits_by_area()
                 m["otherCredits"] = self.s.attribution_rest()
@@ -5567,6 +5573,15 @@ class Connection:
             for line in (lines if isinstance(lines, list) else [])[:PERF_LOG_LINES]:
                 if isinstance(line, str):
                     log.info("game: %s", line[:PERF_LOG_CHARS].replace("\n", " "))
+        elif kind == "mod_log":                 # the mod's own warnings, errors and debug lines (modlog.lua)
+            lines = msg.get("lines")
+            for ln in (lines if isinstance(lines, list) else [])[:PERF_LOG_LINES]:
+                if not isinstance(ln, dict) or not isinstance(ln.get("m"), str):
+                    continue
+                area = "".join(ch for ch in str(ln.get("a") or "core")[:40] if ch.isalnum() or ch in "_-") or "core"
+                level = MOD_LOG_LEVELS.get(ln.get("l"), logging.INFO)
+                logging.getLogger("earthd.game." + area).log(level, "game: %s%s", "debug: " if ln.get("l") == "D" else "",
+                                                             ln["m"][:PERF_LOG_CHARS].replace("\n", " "))
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = road_tracker(self)
@@ -7396,6 +7411,12 @@ async def main_async(args):
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
     ticker = asyncio.create_task(net_log())
+
+    async def crash_watch():        # a worker process's native crash, into the log while the session goes on
+        while True:
+            await asyncio.sleep(CRASH_SWEEP_S)
+            await asyncio.get_running_loop().run_in_executor(None, logsetup.sweep_crashes)
+    crash_task = asyncio.create_task(crash_watch())  # noqa: F841
     profile_task = asyncio.create_task(runtimeprofiler.stream(server))
 
     # Debug: event-loop stalls (every message the game sends waits for them). The loop beats; a thread
@@ -7910,6 +7931,7 @@ def main():
         ap.error("--horizon needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
     debug_names = logsetup.configure(args.verbose, args.debug)
     logsetup.install_crash_hooks(log)
+    logsetup.sweep_crashes(log=log)     # (a crash of the run before that its launcher did not see)
     for line in logsetup.session_lines(args, {a.dest: a.default for a in ap._actions}, debug_names):
         log.info("%s", line)
     raise_open_files()

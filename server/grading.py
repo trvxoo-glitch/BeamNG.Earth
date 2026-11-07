@@ -27,6 +27,7 @@ and the levels <= 0 tiles only (coarser tiles sink under the block and cover far
 """
 from runtimeprofiler import step as profile_step
 import logging
+import logsetup
 import math
 import os
 import threading
@@ -3696,7 +3697,8 @@ class _Planner:
                      for c in [bridge] + list(chain or ())]
             try:
                 nav = bridgetypes.nav_clearance(self.frame, lines)
-            except Exception:
+            except Exception as e:
+                logsetup.fallback(log, "bridge navigation clearance unknown: none assumed", e)
                 nav = 0.0
             req = ch._water(lines, nav, ch._depth(lines))
             if not req:
@@ -3725,7 +3727,8 @@ class _Planner:
                 continue
             try:
                 f = self.md.cell(ck, layers=("roads",), kind="demand").layers.get("roads")
-            except Exception:
+            except Exception as e:
+                logsetup.fallback(log, "a neighbour cell's roads unreadable: left out", e)
                 continue
             if f is None or not len(f):
                 continue

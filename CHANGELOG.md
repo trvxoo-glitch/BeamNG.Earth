@@ -5,6 +5,11 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **Clearer crash, fallback and mod lines in server.log** (docs/LOGGING.md): a native crash's dump names the process
+  and whether the fault was in Python or on a thread of the native code. Places that silently carried on after an
+  error (an unreadable cell, an unknown ground height) log it once and count the rest. The mod's own warnings and
+  errors reach server.log under their area, with repeats limited, and a debug area can be turned on in the mod. One
+  log area in a loop is capped at 400 lines a minute so it cannot push the rest of a session out.
 - **Reading and sending logs** (docs/LOGGING.md): `tools/logdigest.py` turns a server.log into a one-page summary
   (when it ran and how it ended, warnings and errors by how often, tracebacks, the worst hitches, ground and grading
   notes) or shows a window of lines by time, area, level, text or place. `tools/collect_logs.py` zips the logs and

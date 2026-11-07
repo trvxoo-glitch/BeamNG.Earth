@@ -49,7 +49,17 @@ INFO earthd: game hello: mod 0.4.0, protocol 4, format 4
 
 - An uncaught exception in any thread is logged as `uncaught ... in thread <name>` with its traceback. So is an
   error in an asyncio task that nothing awaited. These used to reach stderr only, with no time or name.
-- A native crash (Rust, DuckDB, numpy) writes every thread's stack to `server.log` (faulthandler).
+- A native crash (Rust, DuckDB, numpy, a driver) writes every thread's stack to the crashing process's own file,
+  `logs/crash-<role>-<pid>.txt`, with a header naming the process (server or blockworker) and when it started. The
+  server reads these every 20 s and at its start, and the launcher reads them when the server ends. Each one goes into
+  `server.log` as one CRITICAL line, with the dump below it:
+  `native crash: process blockworker pid 812 started ...: Windows fatal exception: access violation, on a thread
+  outside Python (...) (42 Python threads)`. "On a thread outside Python" means the dump has no `Current thread`:
+  the fault was on a thread the native code started itself, and the Python stacks below are only the threads that
+  were waiting. "In Python thread 0x..., at File ..." names the Python frame that called into the crashing code.
+  Before, every process wrote its dump into `server.log` itself, so a dump said neither which process crashed nor
+  when. A server run by hand, without the launcher's `BNGE_LOG_DIR`, still writes its dump to stderr.
+- **How a run ended**: see "Reading a log" below.
 - A block, road tile or far tile still building after a while logs its worker's stacks (blockworker `_stack_watch`).
   A late heartbeat logs the main thread's stack (`earthd` lag report).
 
@@ -67,6 +77,31 @@ Each area is the logger `earthd.<area>`: grading, surface, roads, blockworker, w
 net, cache, crossings, vegetation, buildings, colormatch, weather, or any other `earthd.<name>` in the code. `all`
 is the same as `-v`. The worker processes inherit the setting, so the block and road tile processes log their debug
 lines too.
+
+## Fallbacks: the places that carry on with a stand-in (`fallback: ...`)
+
+Some steps catch any error and carry on with a stand-in: a neighbour cell that cannot be read is left out, a ground
+height that is not known means not alpine, a bridge's clearance that is not known means none. These used to be
+silent, so a step that failed looked like one with nothing in it. Each such place now logs
+`fallback: <what was assumed>: <the exception>` at INFO the first time in each process. Later ones are DEBUG lines
+(`--debug <area>`), and a process logs `fallbacks this process: ... 41x, ...` when it ends. New code that catches
+broadly and carries on should call `logsetup.fallback(log, "what is assumed", exc)`.
+
+## Size caps
+
+One logger writes at most 400 INFO and DEBUG lines a minute (4000 when its debug lines were asked for). Warnings and
+errors always pass. The rest of a capped minute is counted, and the logger's next line comes after
+`log cap: earthd.<area> held back N lines in a minute`. Three runs are kept and players send files of a few hundred
+KB, so one area stuck in a loop used to push everything else out. `BNGE_LOG_CAP=0` turns the cap off.
+
+## The mod's own warnings and errors (`earthd.game.<area>`, modlog.lua)
+
+Every `log('W'|'E', 'beamngEarth...', ...)` the mod writes also goes to `server.log`, at its own level, under the
+logger `earthd.game.<area>`. The area is the tag after `beamngEarth.`, or `core` when there is none. So
+`--area game.trees` finds the tree code's warnings. Before, these lines were only in `beamng.log`. The same line,
+with its numbers made alike, is sent at most 3 times a minute; the next one carries `(+N more like this before)`.
+The mod's `D` lines are sent only for the areas the server's `BNGE_DEBUG` names (the server's hello passes it on) or
+from the game's console: `beamngEarth_core._modlog.setDebug('roads,trees')` (`'all'` for every area).
 
 ## Graded roads: humps and rail crossings (`earthd.grading`, gradelog.py)
 

@@ -1502,6 +1502,20 @@ class PerfLogTest(ServerHarness):
         got = [r.split("game: ", 1)[1] for r in cm.output if "game: " in r]
         self.assertEqual(got, ["wheels: ground 10 -> 15 at -34.97012,138.66001"])
 
+    def test_mod_lines_logged(self):
+        """The mod's own warnings and errors (modlog.lua) at their level, under earthd.game.<area>."""
+        self.hello()
+        with self.assertLogs("earthd.game", level="INFO") as cm:
+            self.c.send({"type": "mod_log", "lines": [{"l": "W", "a": "trees", "m": "no forest"},
+                                                       {"l": "E", "a": "../x y", "m": "bad"}, {"l": "D", "a": "roads", "m": "asked"},
+                                                       "junk", {"l": "W"}]})
+            self.c.send({"type": "pose", "anchorId": 1, "x": 0, "y": 0, "z": 0})
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and len(cm.output) < 3:
+                time.sleep(0.05)
+        self.assertEqual(cm.output, ["WARNING:earthd.game.trees:game: no forest", "ERROR:earthd.game.xy:game: bad",
+                                     "INFO:earthd.game.roads:game: debug: asked"])
+
     def test_hello_logged(self):
         with self.assertLogs("earthd", level="INFO") as cm:
             self.hello()

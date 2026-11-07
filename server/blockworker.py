@@ -192,7 +192,7 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
         pass
     import logsetup     # (the server's format, and its --debug areas: BNGE_DEBUG, inherited)
     logsetup.worker(log_level)
-    logsetup.install_crash_hooks(log)
+    logsetup.install_crash_hooks(log, role="blockworker")
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()

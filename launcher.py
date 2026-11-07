@@ -243,6 +243,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     env = dict(os.environ)
+    env["BNGE_LOG_DIR"] = os.path.dirname(os.path.abspath(log_path))    # each process's crash dump (logsetup)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
@@ -322,6 +323,23 @@ def exit_line(code, now=None):
 
 
 def note_server_exit(path, code):
+    """The exit record, after the native crash dumps the server's processes left (logsetup.sweep_crashes)."""
+    try:
+        import logging
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import logsetup
+        lg = logging.getLogger("launcher.crash")
+        lg.propagate = False
+        h = logging.FileHandler(path, encoding="utf-8")
+        h.setFormatter(logging.Formatter(logsetup.FORMAT))
+        lg.addHandler(h)
+        try:
+            logsetup.sweep_crashes(os.path.dirname(os.path.abspath(path)), lg)
+        finally:
+            lg.removeHandler(h)
+            h.close()
+    except Exception:       # (never in the way of the exit line)
+        pass
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(exit_line(code) + "\n")

@@ -145,6 +145,8 @@ MOD_TO_SERVER = {
     "perf_log": {"lines": F((list, dict))},
     # the mod's diagnostics (diaglog.lua; additive): the ground's materials, collision rebuilds, the wheels' ground
     "diag_log": {"lines": F((list, dict))},
+    # the mod's own warnings, errors and asked-for debug lines (modlog.lua; additive): {l, a, m} each
+    "mod_log": {"lines": F((list, dict))},
     # what the block's files say under the car where its tyres changed ground (diaglog.lua; Connection.ground_probe)
     "ground_probe": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "x": F(NUM), "y": F(NUM),
                      "from": F(str, OPT), "to": F(str, OPT)},
@@ -238,6 +240,7 @@ SERVER_TO_MOD = {
     "hello": {"runtimeProfiler": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
+              "debug": F(str, OPT),         # the server's BNGE_DEBUG: the mod's areas' D lines (modlog.lua)
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
               "blockSize": F(int),              # the terrain block: samples per edge (always since 2026-11-01) ...
               "squareSize": F(NUM),             # ... and their spacing, m (1 m; without both the mod takes 1024 x 2 m)

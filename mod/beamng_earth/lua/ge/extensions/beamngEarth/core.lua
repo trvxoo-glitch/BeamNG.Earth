@@ -110,6 +110,8 @@ local mpanchor = require('beamngEarth/mpanchor')       -- BeamMP: other players'
 local seasonlook = require('beamngEarth/seasonlook')   -- the trees' leaves in the season (hello.season) -- the AI road graph for the stock traffic and AI (map.reset)
 local perflog = require('beamngEarth/perflog')         -- hitches and frame-rate drops into server.log (perflog.lua)
 M._diaglog = require('beamngEarth/diaglog')         -- the ground's materials, collision, the wheels' ground (diaglog.lua)
+M._modlog = require('beamngEarth/modlog')           -- the mod's warnings and errors into server.log (modlog.lua)
+M._modlog.install()
 
 local LEVEL_ID = 'beamng_earth'
 local MOD_VERSION = '0.4.0'
@@ -969,6 +971,7 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    M._modlog.setDebug(msg.debug)   -- the server's BNGE_DEBUG: the mod's D lines of those areas into its log
     require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
     st.sessionId = msg.sessionId
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
@@ -2089,6 +2092,8 @@ function M._diagFrame()
     if veh then pcall(veh.queueLuaCommand, veh, diaglog.WHEELS_CMD) end
   end
   diaglog.tick(st.clock)
+  local ml = M._modlog.drain()
+  if #ml > 0 and net.isConnected() then net.send({ type = 'mod_log', lines = ml }) end
   local probes = diaglog.takeProbes()
   if #probes > 0 and st.block and p and net.isConnected() then
     for _, pr in ipairs(probes) do      -- (what the block's files hold where the tyres changed ground)
