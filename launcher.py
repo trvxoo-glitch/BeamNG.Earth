@@ -331,6 +331,47 @@ def server_port_busy(port=SERVER_PORT):
         return False
 
 
+def _startup_tail(log_path):
+    """A bounded, complete-line tail: startup failures can produce very large tracebacks/logs."""
+    try:
+        with open(log_path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            start = max(0, stream.tell() - 65536)
+            stream.seek(start)
+            tail = stream.read(65536)
+        return tail.partition(b"\n")[2] if start else tail
+    except OSError:
+        return b""
+
+
+def _startup_phase(tail):
+    phase = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " INFO earthd: startup: " in line:
+            phase = line.split(" INFO earthd: startup: ", 1)[1][:180]
+    return phase
+
+
+def server_start_diagnostic(proc, log_path):
+    """Describe exit versus deadline and the last known step/error, without dumping the whole log."""
+    import re
+    tail = _startup_tail(log_path)
+    code = proc.poll()
+    text = (f"The companion stopped before it was ready (exit code {code})." if code is not None else
+            "The companion is still running but did not become ready before the startup deadline.")
+    phase = _startup_phase(tail)
+    if phase:
+        text += " Last startup step: " + phase + "."
+    error = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " ERROR " in line or " CRITICAL " in line or re.match(r"^[\w.]+(?:Error|Exception):", line):
+            error = line.split(": ", 1)[-1] if " ERROR " in line or " CRITICAL " in line else line
+    if error:
+        error = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", error)[:400]
+        text += " Last error: " + error
+    return text
+
+
 def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """Read the owned child's post-bind marker from its freshly truncated startup log.
 
@@ -339,17 +380,16 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """
     marker = b"earthd listening on 127.0.0.1:"
     deadline = time.monotonic() + timeout
+    last_phase = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             return False
         try:
-            with open(log_path, "rb") as log:
-                log.seek(0, os.SEEK_END)
-                start = max(0, log.tell() - 65536)
-                log.seek(start)
-                tail = log.read(65536)
-            if start:
-                tail = tail.partition(b"\n")[2]  # discard a potentially partial first line
+            tail = _startup_tail(log_path)
+            phase = _startup_phase(tail)
+            if phase and phase != last_phase:
+                row("World server", phase)
+                last_phase = phase
             for line in tail.splitlines():
                 if not line.startswith(marker):
                     continue
@@ -1357,14 +1397,33 @@ def hand_over():
             return True
         if code == 0:
             return True
-    problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
-            "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
-            "About) downloads it again.")
+    sac = smart_app_control_on() or "4551" in str(code)
+    if sac:
+        problem(f"Windows Smart App Control blocked the updated BeamNG.Earth ({os.path.basename(new)}).",
+                "It only runs apps from a verified publisher, and BeamNG.Earth is not code-signed yet (it is "
+                "planned). This version keeps working, and that version will not be offered again.")
+    else:
+        problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
+                "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
+                "About) downloads it again.")
     try:
-        selfupdate.drop_staged()
+        selfupdate.drop_staged(blocked_by="smart_app_control" if sac else None)
     except Exception:
         pass
     return False
+
+
+def smart_app_control_on():
+    """Is Windows 11's Smart App Control enforcing (it blocks unsigned apps without a "run anyway"; GitHub #823)?
+    HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy VerifiedAndReputablePolicyState: 0 off, 1 on, 2 evaluation."""
+    if not IS_WIN:
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\CI\Policy") as k:
+            return int(winreg.QueryValueEx(k, "VerifiedAndReputablePolicyState")[0]) == 1
+    except (OSError, ValueError):
+        return False
 
 
 HANDOVER_CHECK_S = 5.0          # hand_over: the new copy must still run this long after its start (else: this one)
@@ -1767,7 +1826,7 @@ def run(args):
         row("Server log", log_path)
         if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
-                    f"See {log_path} for the startup error, then try again.")
+                    server_start_diagnostic(server, log_path) + f"\nFull startup log: {log_path}")
             raise SystemExit(1)
         row("World server", "running")
         try:
