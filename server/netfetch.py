@@ -55,6 +55,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 import base64
+import errno
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -181,6 +182,10 @@ POLICIES = {
     "tecnagamer.github.io": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=2000, allow_prefetch=True,
                                        offline_ok=True, miss_ttl=7 * DAY, timeout=20.0, max_attempts=2,
                                        base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True),
+    # the clouds seen from space (spaceclouds.py: NASA GIBS's latest VIIRS true-colour day, up to 144 small tiles when a
+    # camera rises above the clouds; public domain, no key)
+    "gibs.earthdata.nasa.gov": HostPolicy(rate=8.0, burst=40.0, max_conc=6, daily_budget=6000, cache_ttl=3 * 3600.0,
+                                          miss_ttl=3600.0, timeout=20.0, max_attempts=2, optional=True, **TILE_HOST),
     # 20 variables a request = 2 Open-Meteo calls: 500 requests = 1,000 calls a day, hard
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
                                      cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True),
@@ -328,6 +333,7 @@ ROLES = {
     "s3-us-west-2.amazonaws.com": "US lidar for bridge deck heights; estimated meanwhile",
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
+    "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
@@ -718,11 +724,40 @@ class HttpsTransport:
         return phost, pport, user, passw
 
     def request(self, url, headers, timeout):
-        """(status, {lower-case header: value}, body)."""
+        """(status, {lower-case header: value}, body). A public S3 source on an IPv6-only network (GitHub #763: its
+        hosts have no AAAA record) goes to the bucket's dual-stack endpoint (PR #808), but only once an IPv4 connection
+        to it found no route (_no_route), and from then on for this run: Python's http.client has no Happy Eyeballs, so
+        on the many networks where IPv6 is set up but broken, dual-stack hosts first would wait out every new
+        connection's IPv6 attempt. Source URLs stay the cache, quota and NO_PROXY identities; proxied requests are left
+        to the proxy."""
+        u = urlsplit(url)
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        host = (u.hostname or "").lower()
+        auth = any(k.lower() == "authorization" for k in headers)
+        if proxy is None and host in _DUALSTACK_HOSTS:
+            dual = _dualstack(url, auth)
+            if dual != url:
+                return self._request_once(dual, headers, timeout, proxy)
+        try:
+            return self._request_once(url, headers, timeout, proxy)
+        except OSError as e:
+            if proxy is not None or not _no_route(e):
+                raise
+            dual = _dualstack(url, auth)
+            if dual == url:
+                raise
+            got = self._request_once(dual, headers, timeout, proxy)
+            if host not in _DUALSTACK_HOSTS:
+                _DUALSTACK_HOSTS.add(host)
+                log.info("net: %s has no IPv4 route here: its dual-stack endpoint from now on (%s)", host,
+                         urlsplit(dual).hostname)
+            return got
+
+    def _request_once(self, url, headers, timeout, proxy):
+        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
         u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
         if proxy is None:
             key = (u.scheme, u.netloc, None)
         else:
@@ -781,6 +816,27 @@ class HttpsTransport:
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
                     raise               # Fetcher retries through the bucket, with backoff)
                 # else: the server may have closed the idle keep-alive connection; reconnect once
+
+
+# IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
+# their dual-stack endpoints since (transport request)
+_DUALSTACK_HOSTS = set()
+# errno / WinError of a connection with no route to the address (an IPv6-only network, no NAT64): ENETUNREACH,
+# EHOSTUNREACH, EADDRNOTAVAIL; WSAENETUNREACH 10051, WSAEHOSTUNREACH 10065, WSAEADDRNOTAVAIL 10049
+_NO_ROUTE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, 10051, 10065, 10049}
+
+
+def _no_route(e):
+    """Is OSError e a connection that found no route to the host's (IPv4) address?"""
+    return getattr(e, "winerror", None) in _NO_ROUTE or getattr(e, "errno", None) in _NO_ROUTE
+
+
+def _dualstack(url, authorized):
+    """The bucket's dual-stack endpoint URL for a known public S3 source (native earthfast s3_dualstack_url), else
+    url."""
+    import fast
+    fast.require(153, "S3 dual-stack endpoints")
+    return fast._ef.s3_dualstack_url(url, bool(authorized))
 
 
 # --- download speed ---------------------------------------------------------------------------
