@@ -23,7 +23,8 @@ function M.reset() q, seen, debugAll, debugAreas = {}, {}, false, {} end
 
 function M.area(tag)
   if type(tag) ~= 'string' or tag:sub(1, 11) ~= 'beamngEarth' then return nil end
-  local a = tag:match('^beamngEarth[%._](.+)$')
+  -- (the game's log names the extension first: 'beamngEarth_farfield.beamngEarth' is farfield)
+  local a = tag:match('^beamngEarth[%._]([%w]+)')
   return a or 'core'
 end
 

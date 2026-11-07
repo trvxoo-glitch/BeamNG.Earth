@@ -188,6 +188,7 @@ _hooked = False
 LOG_DIR_ENV = "BNGE_LOG_DIR"       # the launcher's logs folder: each process's native-crash dump in its own file there
 CRASH_PREFIX = "crash-"
 _fault_fh = None
+_reported = {}        # crash file -> characters already reported (sweep_crashes: a process that carried on)
 
 
 def _crash_file(role):
@@ -261,6 +262,22 @@ def sweep_crashes(log_dir=None, log=None):
             with open(took, encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError:
+            # still open by its process (Windows): faulthandler dumps on an exception the native code may catch
+            # itself (its vectored handler sees it first), so a process with a dump can carry on. Read it, report
+            # it once, and leave the file for the sweep after the process ends.
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            got = read_crash(text, name)
+            if got is not None and _reported.get(name, 0) < len(text):
+                _reported[name] = len(text)
+                head, dump = got
+                head = head.replace("native crash:", "native exception (the process carried on, so the native code "
+                                    "may have handled it):", 1)
+                log.warning("%s\n%s", head, "\n".join(dump))
+                out.append(head)
             continue
         got = read_crash(text, name)
         if got is None:
@@ -274,7 +291,10 @@ def sweep_crashes(log_dir=None, log=None):
                     pass
             continue
         head, dump = got
-        log.critical("%s\n%s", head, "\n".join(dump))
+        if _reported.get(name):
+            head += " (reported above while it ran; its process has ended since)"
+            dump = []
+        log.critical("%s\n%s", head, "\n".join(dump)) if dump else log.critical("%s", head)
         out.append(head)
         _remove(took)
     return out

@@ -265,6 +265,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
     with open(log_path, "w", encoding="utf-8") as out:
         kw.update(stdout=out, stderr=subprocess.STDOUT)
         proc = subprocess.Popen(cmd, **kw)
+    proc.bnge_log = log_path        # (stop_server: the exit record when the launcher stops it)
     threading.Thread(target=echo_server_log, args=(log_path, proc), daemon=True).start()
     return proc
 
@@ -306,12 +307,14 @@ def keep_previous_log(path, keep=2):
         pass                    # (still open somewhere on Windows: overwritten as before)
 
 
-def exit_line(code, now=None):
+def exit_line(code, now=None, why=None):
     """The record the launcher adds to server.log when the server ends (a log that just stops said nothing about
     why): 'server process exited with code 0 (normal)'. Pure but for the clock."""
     import datetime
     now = now or datetime.datetime.now()
-    if code in (0, None):
+    if why:
+        how = why
+    elif code in (0, None):
         how = "normal"
     elif code < 0:
         how = "killed by signal %d" % -code
@@ -322,7 +325,7 @@ def exit_line(code, now=None):
     return "%s INFO launcher: server process exited with code %s (%s)" % (now.strftime("%Y-%m-%d %H:%M:%S,%f")[:23], code, how)
 
 
-def note_server_exit(path, code):
+def note_server_exit(path, code, why=None):
     """The exit record, after the native crash dumps the server's processes left (logsetup.sweep_crashes)."""
     try:
         import logging
@@ -342,7 +345,7 @@ def note_server_exit(path, code):
         pass
     try:
         with open(path, "a", encoding="utf-8") as f:
-            f.write(exit_line(code) + "\n")
+            f.write(exit_line(code, why=why) + "\n")
     except OSError:
         pass
 
@@ -357,7 +360,8 @@ def echo_server_log(path, proc):
                     _out(text)
                 if not lines:
                     if proc.poll() is not None:
-                        note_server_exit(path, proc.returncode)
+                        if not getattr(proc, "bnge_stopping", False):     # (stop_server writes its own)
+                            note_server_exit(path, proc.returncode)
                         return
                     time.sleep(0.5)
     except OSError:
@@ -410,6 +414,7 @@ def stop_server(proc):
     if proc is None or proc.poll() is not None:
         return
     row("World server", "stopping")
+    proc.bnge_stopping = True
     try:
         if IS_WIN:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
@@ -425,6 +430,8 @@ def stop_server(proc):
             proc.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired):
             pass
+    if getattr(proc, "bnge_log", None):      # (the kill leaves the server no time to say so: the launcher does)
+        note_server_exit(proc.bnge_log, proc.poll(), why="stopped by the launcher: the game closed or the launcher ended")
 
 
 # --- the game -------------------------------------------------------------------------------------

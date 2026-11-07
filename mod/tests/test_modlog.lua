@@ -4,7 +4,8 @@ local L = require('beamngEarth/modlog')
 local now = 0
 L.now = function() return now end
 
-T.check(L.area('beamngEarth') == 'core' and L.area('beamngEarth.trees') == 'trees' and L.area('other') == nil,
+T.check(L.area('beamngEarth') == 'core' and L.area('beamngEarth.trees') == 'trees' and L.area('other') == nil
+  and L.area('beamngEarth_farfield.beamngEarth') == 'farfield' and L.area('beamngEarth_core.beamngEarth.x') == 'core',
   'areas from tags')
 L.reset()
 L.note('W', 'beamngEarth.trees', 'no forest at 12.5')

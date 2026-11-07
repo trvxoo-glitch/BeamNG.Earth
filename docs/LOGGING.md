@@ -59,6 +59,11 @@ INFO earthd: game hello: mod 0.4.0, protocol 4, format 4
   were waiting. "In Python thread 0x..., at File ..." names the Python frame that called into the crashing code.
   Before, every process wrote its dump into `server.log` itself, so a dump said neither which process crashed nor
   when. A server run by hand, without the launcher's `BNGE_LOG_DIR`, still writes its dump to stderr.
+  On Windows, faulthandler also dumps an exception that the native code may catch itself. If the process carries on,
+  the line is a WARNING, `native exception (the process carried on ...)`, and it is reported once.
+- A crash file with only its header line is a process that was killed. A normal exit removes its file. When the
+  launcher stops the server (the game closed), it reads the crash files and writes
+  `server process exited ... (stopped by the launcher: ...)` itself, because the kill gives the server no time to.
 - **How a run ended**: see "Reading a log" below.
 - A block, road tile or far tile still building after a while logs its worker's stacks (blockworker `_stack_watch`).
   A late heartbeat logs the main thread's stack (`earthd` lag report).
