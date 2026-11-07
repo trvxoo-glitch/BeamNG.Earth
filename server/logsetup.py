@@ -14,12 +14,14 @@ debug output per area, crash and stall evidence, and the session's header.
   defaults, first in every log, so a log from a player says what made it.
 Pure but for the logging module, faulthandler and the environment.
 """
+import atexit
 import faulthandler
 import logging
 import os
 import platform
 import sys
 import threading
+import time
 
 FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 ENV = "BNGE_DEBUG"
@@ -109,6 +111,15 @@ def install_crash_hooks(log=None, fault_file=None):
             faulthandler.enable(file=f, all_threads=True)
     except (OSError, ValueError, AttributeError, RuntimeError):
         pass
+    started = time.time()
+
+    def at_exit():
+        try:
+            log.info("shutdown: server process ending normally after %.0f s", time.time() - started)
+        except Exception:
+            pass
+    atexit.register(at_exit)
+    install_crash_hooks.atexit = at_exit
     hooks = (prev_sys, prev_thread)
     install_crash_hooks.previous = hooks
     return True
@@ -117,6 +128,9 @@ def install_crash_hooks(log=None, fault_file=None):
 def uninstall_crash_hooks():
     """The hooks before install_crash_hooks (tests)."""
     global _hooked
+    at_exit = getattr(install_crash_hooks, "atexit", None)
+    if at_exit is not None:
+        atexit.unregister(at_exit)
     prev = getattr(install_crash_hooks, "previous", None)
     if prev is not None:
         sys.excepthook, threading.excepthook = prev

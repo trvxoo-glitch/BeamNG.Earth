@@ -305,6 +305,30 @@ def keep_previous_log(path, keep=2):
         pass                    # (still open somewhere on Windows: overwritten as before)
 
 
+def exit_line(code, now=None):
+    """The record the launcher adds to server.log when the server ends (a log that just stops said nothing about
+    why): 'server process exited with code 0 (normal)'. Pure but for the clock."""
+    import datetime
+    now = now or datetime.datetime.now()
+    if code in (0, None):
+        how = "normal"
+    elif code < 0:
+        how = "killed by signal %d" % -code
+    elif code > 0x7FFFFFFF - 0x10000 or code >= 0xC0000000:
+        how = "crashed (Windows status 0x%08X)" % (code & 0xFFFFFFFF)
+    else:
+        how = "failed"
+    return "%s INFO launcher: server process exited with code %s (%s)" % (now.strftime("%Y-%m-%d %H:%M:%S,%f")[:23], code, how)
+
+
+def note_server_exit(path, code):
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(exit_line(code) + "\n")
+    except OSError:
+        pass
+
+
 def echo_server_log(path, proc):
     state = {}
     try:
@@ -315,6 +339,7 @@ def echo_server_log(path, proc):
                     _out(text)
                 if not lines:
                     if proc.poll() is not None:
+                        note_server_exit(path, proc.returncode)
                         return
                     time.sleep(0.5)
     except OSError:

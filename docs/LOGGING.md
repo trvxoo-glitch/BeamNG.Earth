@@ -131,6 +131,38 @@ game: ground minute (60s): blocks 14 (12 swaps, 2 imports, 1 partial, slowest 31
 - **`ground minute`**: block commits, collision rebuilds (be:reloadCollision from roads.lua: how many, the slowest,
   the longest gap between two) and the wheels' ground ids by share of the samples.
 
+## Reading a log and sending one (`tools/logdigest.py`, `tools/collect_logs.py`)
+
+```
+python3 tools/logdigest.py                              a page-sized summary of the latest server.log
+python3 tools/logdigest.py --around 18:01:07 --secs 20  the lines within 20 s of a time
+python3 tools/logdigest.py --area grading --level warning
+python3 tools/logdigest.py --near -34.9954,138.7003 --radius 200   lines naming a place (any lat,lon in the line)
+python3 tools/logdigest.py --grep hitch
+python3 tools/collect_logs.py [--user-dir <the game's user folder>] [-o bug.zip]
+```
+
+- The summary gives when the run started and ended, the session header, the count per level, warnings and errors
+  grouped by shape (numbers and ids made alike) with the first line number, tracebacks, the worst hitches, and the
+  notable ground and grading lines. Start there, then use the filters on the line numbers and times it names.
+- **How a run ended.** A normal stop logs `shutdown: server process ending normally after N s`. The launcher then adds
+  `launcher: server process exited with code N (normal | killed by signal | crashed (Windows status 0x...) | failed)`.
+  A log with neither stopped without a trace: a hard kill, a power loss, or a build from before this was added.
+- **The bundle** holds server.log and the two runs before it, launcher.log, the game's beamng.log and recent reports,
+  and SUMMARY.txt. Your user name, home folder and the value after any name containing key, token, secret, password,
+  cookie or auth are hidden. Each file is cut to its last 8 MB. Nothing is sent anywhere: attach the zip yourself.
+
+## Where to look first
+
+| What went wrong | Start with |
+| --- | --- |
+| The server stopped or the game lost it | the end of the summary, then `--around` its last time; `uncaught` and `Current thread` lines |
+| A stall or hitch in the game | `--grep hitch` (cause and place), then `--around` that time for the server's lines |
+| A road is the wrong height or has a hump | `--area grading`, `--near` the place; add `--debug grading` to see revisited cells |
+| A paved road drives like dirt | the `ground block` and `wheels:` lines near the place, then `ground files` and the nearest-roads line |
+| Something slow on the server | `slow code` and lag reports; `--debug` the area it names |
+| A message the game or server ignores | `game hello` (versions), then warnings by how often |
+
 ## BeamNG's own tools while developing
 
 - The console (`~`) shows `beamng.log` live. `dump(obj)` prints a table. Our extensions are `beamngEarth_core`,

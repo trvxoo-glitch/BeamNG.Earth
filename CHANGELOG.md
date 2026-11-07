@@ -5,6 +5,11 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **Reading and sending logs** (docs/LOGGING.md): `tools/logdigest.py` turns a server.log into a one-page summary
+  (when it ran and how it ended, warnings and errors by how often, tracebacks, the worst hitches, ground and grading
+  notes) or shows a window of lines by time, area, level, text or place. `tools/collect_logs.py` zips the logs and
+  the game's log into one file with the user name, home folder and key or token values hidden. A log now ends with
+  why: the server logs its normal shutdown and the launcher adds the exit code (a crash, a kill) to server.log.
 - **More in the logs for finding problems** (docs/LOGGING.md): server.log now starts with what made it (the release,
   Python, the OS, the machine, the options and switches that differ from the defaults, the mod's version). Rail
   crossings whose road and track grading disagree, and humps in a road's profile, are logged with their coordinates.
