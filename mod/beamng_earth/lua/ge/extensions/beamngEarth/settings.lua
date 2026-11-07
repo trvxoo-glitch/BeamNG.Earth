@@ -608,12 +608,10 @@ function M.uiState()
     banner = core and core.banner and core.banner() or nil,
     update = core and core.updateInfo and core.updateInfo() or nil,  -- a newer version on GitHub
   }
-  -- server features (status only): weather, gravity, imagery de-shadowing and colour seams
+  -- server features (status only): weather and gravity
   local w = ext('beamngEarth_weather')
   status.weather = w and w.statusLine and w.statusLine() or nil
   status.gravity = w and w.gravityLine and w.gravityLine() or nil
-  status.deshadow = st and st.deshadow or 'off'
-  status.colormatch = st and st.colormatch or 'off'
   -- the download cache: the server's last numbers, fresh ones asked every CACHE_POLL-th call (the page
   -- polls every 2 s while it is open)
   cachePolls = cachePolls + 1
@@ -908,15 +906,17 @@ function M.uiAreaPlanResult(id)
   local core = ext('beamngEarth_core')
   return core and core.takeAreaPlan and core.takeAreaPlan(tonumber(id)) or nil
 end
-function M.uiAreaAdd(s, w, n, e, name, mode)
-  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode))
+-- fast: the fast pre-cache (the game paused, every core: server areas.py fast mode)
+function M.uiAreaAdd(s, w, n, e, name, mode, fast)
+  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode),
+    fast == true)
 end
 -- A saved route: the GPS's planned route with half m each side (the estimate, then the download, as an area's).
 function M.uiRoutePlan(half, mode)
   return areaSend('requestRoutePlan', tonumber(half), areaMode(mode))
 end
-function M.uiRouteAdd(half, name, mode)
-  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode))
+function M.uiRouteAdd(half, name, mode, fast)
+  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode), fast == true)
 end
 function M.uiAreaCmd(area, op)
   return areaSend('areaCmd', tostring(area or ''), tostring(op or ''))
@@ -928,7 +928,7 @@ end
 function M.uiAreas()
   local core = ext('beamngEarth_core')
   local a = core and core.areasState and core.areasState()
-  return { areas = a and a.areas or {}, pinnedBytes = a and a.pinnedBytes or nil }
+  return { areas = a and a.areas or {}, pinnedBytes = a and a.pinnedBytes or nil, fast = a and a.fast or '' }
 end
 
 -- "lat, lon" typed in the map's search box -> { lat, lon } or { error }.
@@ -1032,10 +1032,18 @@ function M.mapControls(on)
     end
     pcall(pushActionMap, 'BigMap')
     local am = scenetree.findObject('BigMapActionMap')
-    if am then am.trapHandledEvents = false end      -- (as the stock map: nothing else gets stuck behind it)
+    if am then
+      -- A handled zoom must not reach the menu action map too: its filter bindings can change the cache view.
+      -- Unhandled menu navigation still passes through. Restore the map's previous policy on close.
+      mapCtl.actionMap, mapCtl.trapHandledEvents = am, am.trapHandledEvents
+      am.trapHandledEvents = true
+    end
   elseif not on and mapCtl then
     if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
-    for f, fn in pairs(mapCtl) do if f ~= 'bm' and f ~= 'vt' and f ~= 'vtOrig' then mapCtl.bm[f] = fn end end
+    -- (pcall: the action map may be gone by now, a level unload)
+    if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
+    for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
+        'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
     mapCtl = nil
     pcall(popActionMap, 'BigMap')
     if filter and filter.addAction then pcall(filter.addAction, 0, 'beamngEarthMapBlocked', false) end

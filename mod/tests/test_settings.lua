@@ -248,13 +248,9 @@ T.check(s.settings.rebaseDistance == settings.get('rebaseDistance') and #s.schem
 T.check(s.status.connection == 'disconnected' and s.status.session == 'abc' and s.status.anchorId == 3
   and s.status.attribution == 'credits' and s.status.dist == 500, 'uiState: status from the core')
 T.check(s.dev and s.dev.active, 'uiState: dev state')
-T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008') and s.status.deshadow == 'off',
-  'uiState: server features (weather, gravity, de-shadowing off)')
-stTbl.deshadow = 'full'
-T.check(settings.uiState().status.deshadow == 'full', 'uiState: de-shadowing mode from the hello')
-T.check(s.status.colormatch == 'off', 'uiState: colour seams off without hello.colormatch')
-stTbl.colormatch = 's2'
-T.check(settings.uiState().status.colormatch == 's2', 'uiState: colour-seam mode from the hello')
+T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008'),
+  'uiState: server features (weather, gravity)')
+T.check(s.status.deshadow == nil and s.status.colormatch == nil, 'uiState: no imagery rows (left the About page)')
 T.check(settings.uiDevSet('tint', true).active and devCalls[1] == 'tint=true', 'uiDevSet forwards')
 settings.uiDevPreset('lod')
 T.check(devCalls[2] == 'preset lod', 'uiDevPreset forwards')
@@ -480,6 +476,34 @@ do
   settings.mapControls(false)
   vt.onActionEvent(1, 1)
   T.check(#sent == 2 and orig[2] == 1, 'map closed: the triggers as before')
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
+-- Handled BigMap inputs stop before the menus' overlapping bindings (#766); the original policy is restored.
+do
+  local saved = { freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'), guihooks = rawget(_G, 'guihooks'),
+    pushActionMap = rawget(_G, 'pushActionMap'), popActionMap = rawget(_G, 'popActionMap') }
+  local find = scenetree.findObject
+  for _, previous in ipairs({false, true}) do
+    local am, sent = { trapHandledEvents = previous }, {}
+    local originalZoom = function() end
+    freeroam_bigMapMode = { zoomInOut = originalZoom }
+    scenetree.findObject = function(name) if name == 'BigMapActionMap' then return am end end
+    guihooks = { trigger = function(name, d) if name == settings.MAP_INPUT_EVENT then sent[#sent + 1] = d.kind end end }
+    pushActionMap, popActionMap = function() end, function() end
+    settings.mapControls(true)
+    settings.mapControls(true) -- opening twice must not replace the saved policy
+    freeroam_bigMapMode.zoomInOut(1, true)
+    -- The lower menu map receives the input only when the top action map allows a handled event through.
+    if not am.trapHandledEvents then freeroam_bigMapMode.onChangeUiFilter(1, 1) end
+    T.check(#sent == 1 and sent[1] == 'zoom_trigger', 'map zoom does not also cycle the cache layer')
+    freeroam_bigMapMode.onChangeUiFilter(1, -1)
+    T.check(sent[2] == 'filter', 'a dedicated bumper still cycles the cache layer')
+    settings.mapControls(false)
+    T.check(am.trapHandledEvents == previous and freeroam_bigMapMode.zoomInOut == originalZoom,
+      'map close restores action-map policy and stock callbacks')
+  end
+  scenetree.findObject = find
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
