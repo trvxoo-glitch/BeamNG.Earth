@@ -60,7 +60,7 @@ INFO earthd: game hello: mod 0.4.0, protocol 4, format 4
   Before, every process wrote its dump into `server.log` itself, so a dump said neither which process crashed nor
   when. A server run by hand, without the launcher's `BNGE_LOG_DIR`, still writes its dump to stderr.
   On Windows, faulthandler also dumps an exception that the native code may catch itself. If the process carries on,
-  the line is a WARNING, `native exception (the process carried on ...)`, and it is reported once.
+  the line is a WARNING, `native exception (its process was still running when read ...)`, reported once. If the process then dies, a CRITICAL `native crash` line follows.
 - A crash file with only its header line is a process that was killed. A normal exit removes its file. When the
   launcher stops the server (the game closed), it reads the crash files and writes
   `server process exited ... (stopped by the launcher: ...)` itself, because the kill gives the server no time to.

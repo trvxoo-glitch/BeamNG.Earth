@@ -274,8 +274,8 @@ def sweep_crashes(log_dir=None, log=None):
             if got is not None and _reported.get(name, 0) < len(text):
                 _reported[name] = len(text)
                 head, dump = got
-                head = head.replace("native crash:", "native exception (the process carried on, so the native code "
-                                    "may have handled it):", 1)
+                head = head.replace("native crash:", "native exception (its process was still running when read: a crash in progress, or one the native code "
+                                    "handled itself):", 1)
                 log.warning("%s\n%s", head, "\n".join(dump))
                 out.append(head)
             continue
