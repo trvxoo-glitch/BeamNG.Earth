@@ -116,6 +116,7 @@ import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
 import pacer  # noqa: E402
+import posevel  # noqa: E402
 import peerwork as peerworkmod  # noqa: E402
 import deshadow as deshadowmod  # noqa: E402
 import farfield  # noqa: E402
@@ -4806,6 +4807,7 @@ class Connection:
         self.view_at = None             # the camera's x, y there when it is VIEW_AWAY_M or more from the car, else None
         self.foci = ()                  # other vehicles' collision foci there ((x, y, r, trees), parse_foci)
         self.vel = (0.0, 0.0)
+        self.vel_filter = posevel.VelocityFilter()     # the game's velocity unless the car's motion says it is a glitch
         self.cam = None                 # pose.cam (protocol 3), kept for diagnostics
         self.desired = {}               # key -> Tile (active anchor)
         self.refined = set()            # nodes refined by the last selection (hysteresis)
@@ -6465,8 +6467,13 @@ class Connection:
             self.focus = (float(fx), float(fy))
         else:
             return
-        self.vel = (vx, vy)
         now = time.monotonic()
+        # (a physics glitch's velocity of hundreds of km/s steered every look-ahead and the catch-up boost: posevel.py)
+        flt = getattr(self, "vel_filter", None)
+        if flt is None:
+            flt = self.vel_filter = posevel.VelocityFilter()
+        vx, vy = flt.update(now, self.active, *self.focus, vx, vy)
+        self.vel = (vx, vy)
         self.s.speed = math.hypot(vx, vy)
         if math.hypot(vx, vy) > FAST_BASE_V:
             self.s.fast_at = now
