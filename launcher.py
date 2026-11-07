@@ -253,6 +253,8 @@ def start_server(user_dir, extra, log_path, game_running=None):
     if telemetry_on() and "--offline" not in extra:
         cmd += ["--telemetry", "on"]
     env = dict(os.environ)
+    env["BNGE_LOG_DIR"] = os.path.dirname(os.path.abspath(log_path))    # each process's crash dump (logsetup)
+    env.setdefault("RUST_BACKTRACE", "1")       # a panic in the native module (earthfast) logs where it was
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
@@ -274,6 +276,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
     with open(log_path, "w", encoding="utf-8") as out:
         kw.update(stdout=out, stderr=subprocess.STDOUT)
         proc = subprocess.Popen(cmd, **kw)
+    proc.bnge_log = log_path        # (stop_server: the exit record when the launcher stops it)
     threading.Thread(target=echo_server_log, args=(log_path, proc), daemon=True).start()
     return proc
 
@@ -315,6 +318,49 @@ def keep_previous_log(path, keep=2):
         pass                    # (still open somewhere on Windows: overwritten as before)
 
 
+def exit_line(code, now=None, why=None):
+    """The record the launcher adds to server.log when the server ends (a log that just stops said nothing about
+    why): 'server process exited with code 0 (normal)'. Pure but for the clock."""
+    import datetime
+    now = now or datetime.datetime.now()
+    if why:
+        how = why
+    elif code in (0, None):
+        how = "normal"
+    elif code < 0:
+        how = "killed by signal %d" % -code
+    elif code > 0x7FFFFFFF - 0x10000 or code >= 0xC0000000:
+        how = "crashed (Windows status 0x%08X)" % (code & 0xFFFFFFFF)
+    else:
+        how = "failed"
+    return "%s INFO launcher: server process exited with code %s (%s)" % (now.strftime("%Y-%m-%d %H:%M:%S,%f")[:23], code, how)
+
+
+def note_server_exit(path, code, why=None):
+    """The exit record, after the native crash dumps the server's processes left (logsetup.sweep_crashes)."""
+    try:
+        import logging
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import logsetup
+        lg = logging.getLogger("launcher.crash")
+        lg.propagate = False
+        h = logging.FileHandler(path, encoding="utf-8")
+        h.setFormatter(logging.Formatter(logsetup.FORMAT))
+        lg.addHandler(h)
+        try:
+            logsetup.sweep_crashes(os.path.dirname(os.path.abspath(path)), lg)
+        finally:
+            lg.removeHandler(h)
+            h.close()
+    except Exception:       # (never in the way of the exit line)
+        pass
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(exit_line(code, why=why) + "\n")
+    except OSError:
+        pass
+
+
 def echo_server_log(path, proc):
     state = {}
     try:
@@ -325,6 +371,8 @@ def echo_server_log(path, proc):
                     _out(text)
                 if not lines:
                     if proc.poll() is not None:
+                        if not getattr(proc, "bnge_stopping", False):     # (stop_server writes its own)
+                            note_server_exit(path, proc.returncode)
                         return
                     time.sleep(0.5)
     except OSError:
@@ -413,10 +461,56 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     return False
 
 
-def stop_server(proc):
+CRASH_DUMP_EXT = (".dmp", ".mdmp")
+
+
+def game_crash_files(user_dir, since, depth=2):
+    """The crash dumps the game left since a time: *.dmp / *.mdmp, or *crash* zips and texts, in its user folder and
+    the folders above it (BeamNG's own and Windows' crash handlers), newest first. A crash otherwise looked like
+    closing the game: the server saw only a dropped connection."""
+    found, seen = [], set()
+    roots = [user_dir, os.path.dirname(user_dir or ""), os.path.dirname(os.path.dirname(user_dir or ""))]
+    for root in roots:
+        if not root or not os.path.isdir(root) or root in seen:
+            continue
+        seen.add(root)
+        base = root.rstrip("\\/").count(os.sep)
+        for d, dirs, files in os.walk(root):
+            if d.count(os.sep) - base >= depth:
+                dirs[:] = []
+            dirs[:] = [x for x in dirs if x.lower() not in ("temp", "cache", "mods", "levels", "vehicles", "art")]
+            for f in files:
+                low = f.lower()
+                if low.endswith(CRASH_DUMP_EXT) or ("crash" in low and low.endswith((".zip", ".txt", ".log"))):
+                    p = os.path.join(d, f)
+                    try:
+                        if os.path.getmtime(p) >= since:
+                            found.append(p)
+                    except OSError:
+                        pass
+    return sorted(set(found), key=lambda p: -os.path.getmtime(p))
+
+
+def game_end_reason(user_dir, since, proc=None):
+    """Why the session ended, for the server's exit record: the game's exit code when the launcher started it
+    directly, and the crash dumps it left."""
+    parts = ["the game closed"]
+    code = proc.poll() if proc is not None else None
+    if code not in (None, 0):
+        parts.append("its exit code %s%s" % (code, " (0x%08X)" % (code & 0xFFFFFFFF) if code < 0 or code > 0xFFFF else ""))
+    dumps = game_crash_files(user_dir, since)
+    if dumps:
+        parts.append("it left a crash dump: " + ", ".join(dumps[:3]))
+    elif code not in (None, 0):
+        parts.append("no crash dump found")
+    return "; ".join(parts)
+
+
+def stop_server(proc, why=None):
     if proc is None or proc.poll() is not None:
         return
     row("World server", "stopping")
+    proc.bnge_stopping = True
     try:
         if IS_WIN:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
@@ -432,6 +526,8 @@ def stop_server(proc):
             proc.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired):
             pass
+    if getattr(proc, "bnge_log", None):      # (the kill leaves the server no time to say so: the launcher does)
+        note_server_exit(proc.bnge_log, proc.poll(), why="stopped by the launcher: " + (why or "the game closed or the launcher ended"))
 
 
 # --- the game -------------------------------------------------------------------------------------
@@ -1830,6 +1926,7 @@ def run(args):
         sys.exit(1)
     log_path = os.path.join(data_dir(), "logs", "server.log")
     server = start_server(user_dir, extra, log_path, game_running=bool(running))
+    game_t0, end_why = time.time(), None    # (the game's crash dumps since this start: game_end_reason)
     beammp = None
     try:
         row("World server", "starting")
@@ -1866,17 +1963,22 @@ def run(args):
         else:
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
+            game_t0 = time.time()
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args)
         say()
         say("In the game: Freeroam > BeamNG.Earth.  Closing the game stops the server.")
         say()
         if wait_for_game(proc, server):
             row("Game", "closed")
+            try:
+                end_why = game_end_reason(user_dir, game_t0, proc)
+            except Exception:       # (never in the way of stopping)
+                end_why = None
     finally:
         if beammp is not None:
             import bmplaunch
             bmplaunch.stop(beammp)
-        stop_server(server)
+        stop_server(server, end_why)
 
 
 if __name__ == "__main__":

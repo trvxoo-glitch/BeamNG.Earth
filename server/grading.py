@@ -27,6 +27,7 @@ and the levels <= 0 tiles only (coarser tiles sink under the block and cover far
 """
 from runtimeprofiler import step as profile_step
 import logging
+import logsetup
 import math
 import os
 import threading
@@ -1725,12 +1726,31 @@ class _Planner:
             if mine:
                 self.shared.release(key)
         plans, keeps, covers, opens = got
+        self._diagnose(key, plans, fresh=shared is None)
         with self.lock:
             self.cells.setdefault(key, plans)
             self.keeps.setdefault(key, keeps)
             self.covers.setdefault(key, covers)
             self.opens.setdefault(key, opens)
             return self.cells[key]
+
+    def _diagnose(self, key, plans, fresh):
+        """The cell's rail crossings and humps into the log with their coordinates (gradelog.py), at INFO for plans made
+        here (fresh), else (the plan cache's: another process or an earlier session logged them) with --debug grading
+        only, as is the as-graded profile across each track for them (it reads the DEM again)."""
+        if not plans or not log.isEnabledFor(logging.INFO if fresh else logging.DEBUG):
+            return
+        import gradelog
+        frame = self.frame
+
+        def to_ll(e, n):
+            la, lo, _h = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
+            return la, lo
+        base_fn = grade_fn = None
+        if fresh or log.isEnabledFor(logging.DEBUG):
+            base_fn = lambda e, n: self.elev(*to_ll(e, n))      # noqa: E731
+            grade_fn = lambda e, n, b: grade_points(e, n, b, [p for _f, p in plans])     # noqa: E731
+        gradelog.report_cell(key, plans, to_ll, base_fn, grade_fn, quiet=not fresh)
 
     def _make_cell(self, key):
         """(plans, keeps, covers, opens) of cell key, or None when its roads could not be fetched."""
@@ -3727,7 +3747,8 @@ class _Planner:
                      for c in [bridge] + list(chain or ())]
             try:
                 nav = bridgetypes.nav_clearance(self.frame, lines)
-            except Exception:
+            except Exception as e:
+                logsetup.fallback(log, "bridge navigation clearance unknown: none assumed", e)
                 nav = 0.0
             req = ch._water(lines, nav, ch._depth(lines))
             if not req:
@@ -3756,7 +3777,8 @@ class _Planner:
                 continue
             try:
                 f = self.md.cell(ck, layers=("roads",), kind="demand").layers.get("roads")
-            except Exception:
+            except Exception as e:
+                logsetup.fallback(log, "a neighbour cell's roads unreadable: left out", e)
                 continue
             if f is None or not len(f):
                 continue

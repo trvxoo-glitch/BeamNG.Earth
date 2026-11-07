@@ -1495,6 +1495,41 @@ class PerfLogTest(ServerHarness):
         self.assertEqual(got[2], "two lines", "one log line each, not a number")
         self.assertEqual(len(got), 39, "the first PERF_LOG_LINES entries of a message, the number among them left out")
 
+    def test_diag_lines_logged(self):
+        """The mod's diagnostics (diaglog.lua: the ground's materials, the wheels' ground) the same way."""
+        self.hello()
+        with self.assertLogs("earthd", level="INFO") as cm:
+            self.c.send({"type": "diag_log", "lines": ["wheels: ground 10 -> 15 at -34.97012,138.66001", 3]})
+            self.c.send({"type": "pose", "anchorId": 1, "x": 0, "y": 0, "z": 0})
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not any("game: wheels" in r for r in cm.output):
+                time.sleep(0.05)
+        got = [r.split("game: ", 1)[1] for r in cm.output if "game: " in r]
+        self.assertEqual(got, ["wheels: ground 10 -> 15 at -34.97012,138.66001"])
+
+    def test_mod_lines_logged(self):
+        """The mod's own warnings and errors (modlog.lua) at their level, under earthd.game.<area>."""
+        self.hello()
+        with self.assertLogs("earthd.game", level="INFO") as cm:
+            self.c.send({"type": "mod_log", "lines": [{"l": "W", "a": "trees", "m": "no forest"},
+                                                       {"l": "E", "a": "../x y", "m": "bad"}, {"l": "D", "a": "roads", "m": "asked"},
+                                                       "junk", {"l": "W"}]})
+            self.c.send({"type": "pose", "anchorId": 1, "x": 0, "y": 0, "z": 0})
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and len(cm.output) < 3:
+                time.sleep(0.05)
+        self.assertEqual(cm.output, ["WARNING:earthd.game.trees:game: no forest", "ERROR:earthd.game.xy:game: bad",
+                                     "INFO:earthd.game.roads:game: debug: asked"])
+
+    def test_hello_logged(self):
+        with self.assertLogs("earthd", level="INFO") as cm:
+            self.hello()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not any("game hello:" in r for r in cm.output):
+                time.sleep(0.05)
+        line, = [r for r in cm.output if "game hello:" in r]
+        self.assertIn("protocol", line)
+
 
 class LoadProgressTest(ServerHarness):
     """The loading line's counts (Connection.send_progress): [done, wanted] of the road, tree and far tiles after a pose."""

@@ -978,7 +978,8 @@ def main(argv=None):
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     a = ap.parse_args(argv)
     _require_unpinned_helper()  # before directories, sockets, locks or worker processes exist
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    import logsetup
+    logsetup.worker(logging.INFO)
     out = os.path.join(a.cache_dir, "peer-out")
     os.makedirs(out, exist_ok=True)
     Helper(a.cache_dir, a.workers, out).serve(a.host, a.port)

@@ -147,7 +147,14 @@ MOD_TO_SERVER = {
                          "sunAz": F(NUM, OPT), "sunEl": F(NUM, OPT)},     # (the game sky's sun seen from there)
     # the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)
     "runtime_profiler": {"enabled": F(bool), "mode": F(str, OPT), "probe": F(int, OPT)},
-    "perf_log": {"lines": F((list, dict))},
+    "perf_log": {"lines": F((list, dict)), "t": F(NUM, OPT)},
+    # the mod's diagnostics (diaglog.lua; additive): the ground's materials, collision rebuilds, the wheels' ground
+    "diag_log": {"lines": F((list, dict)), "t": F(NUM, OPT)},
+    # the mod's own warnings, errors and asked-for debug lines (modlog.lua; additive): {l, a, m} each
+    "mod_log": {"lines": F((list, dict)), "t": F(NUM, OPT)},
+    # what the block's files say under the car where its tyres changed ground (diaglog.lua; Connection.ground_probe)
+    "ground_probe": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "x": F(NUM), "y": F(NUM),
+                     "from": F(str, OPT), "to": F(str, OPT)},
     # BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our
     # anchor ({id, host, port, code, weight} each). (Commented out 2026-10-27: shared world building is off.)
     # "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)
@@ -200,7 +207,8 @@ TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squ
            "zBase": F(NUM), "maxHeight": F(NUM), "q": F(NUM),
            "layers": F(list, OPT), "materials": F(list, OPT),     # --surface on (surface.py)
            "base": F(str, OPT), "baseSize": F(NUM, OPT),           # --near-visual detail: the block's photo
-           "ter": F(str, OPT)}                                     # the block as a .ter (swapped in, no import)
+           "ter": F(str, OPT),                                     # the block as a .ter (swapped in, no import)
+           "partial": F(bool, OPT)}                                # built before its map cells (diaglog.lua's line)
 SERVER_TO_MOD = {
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "share_info": {"code": F(str), "weight": F(NUM)},     # BeamMP sharing v2: our share code for the poses
@@ -240,6 +248,7 @@ SERVER_TO_MOD = {
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
+              "debug": F(str, OPT),         # the server's BNGE_DEBUG: the mod's areas' D lines (modlog.lua)
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
               "blockSize": F(int),              # the terrain block: samples per edge (always since 2026-11-01) ...
               "squareSize": F(NUM),             # ... and their spacing, m (1 m; without both the mod takes 1024 x 2 m)
