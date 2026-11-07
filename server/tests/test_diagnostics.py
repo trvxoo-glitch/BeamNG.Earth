@@ -42,7 +42,7 @@ class HealthTest(unittest.TestCase):
         for i in range(10):
             r.add(now - 5 + i * 0.1, i < 3)
         text = health.line([FakePool()], tempfile.gettempdir(), r, connections=1, extra=("fallbacks 3",), now=now)
-        self.assertRegex(text, r"^server \d+ MB; pools road tile 2/2 \+3 queued; workers 1 using \d+ MB")
+        self.assertRegex(text, r"^server [\d.]+ [MG]B; pools road tile 2/2 \+3 queued; workers 1 using [\d.]+ [MG]B")  # (GB once the test process is big)
         self.assertIn("restarts road tile 1", text)
         self.assertIn("event loop busy 30 %", text)
         self.assertIn("GB free (cache)", text)

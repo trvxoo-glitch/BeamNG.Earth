@@ -187,7 +187,7 @@ class ServerHarness(unittest.TestCase):
         return done, seen
 
     def check_terrain(self, t, cx, cy):
-        self.assertEqual(set(t), {"cx", "cy", "heightmap", "size", "squareSize", "zBase", "maxHeight", "q", "ter"})
+        self.assertEqual(set(t), {"cx", "cy", "heightmap", "size", "squareSize", "zBase", "maxHeight", "q", "ter", "bid"})
         self.assertEqual((t["cx"], t["cy"]), (cx, cy))
         self.assertEqual((t["size"], t["squareSize"]), (self.block, heightmap.SQUARE))
         self.assertEqual(t["maxHeight"], t["q"] * 65536)
@@ -349,7 +349,7 @@ class ServerTest(ServerHarness):
         far.apply(seen)
         self.assertFalse([m for m in seen if m["type"] in ("far_tile", "far_swap")])
         self.assertEqual(set(tr), {"type", "requestId", "anchorId", "cx", "cy", "heightmap", "size",
-                                   "squareSize", "zBase", "maxHeight", "q", "ter"})
+                                   "squareSize", "zBase", "maxHeight", "q", "ter", "bid"})
         self.assertEqual((tr["requestId"], tr["anchorId"]), (5, aid))
         h2 = self.check_terrain({k: tr[k] for k in tr if k not in ("type", "requestId", "anchorId")}, 512.0, 0.0)
         # Same anchor frame and quantum: the overlap is bit-identical (§1.8). Block 2 sample
@@ -877,7 +877,7 @@ class MeshServer64Test(MeshServerTest):
         tr, _ = c.until(lambda m: m["type"] == "terrain_ready", timeout=60)
         self.assertEqual((tr["cx"], tr["cy"], tr["size"]), (128.0, -128.0, 1024))
         h = self.check_terrain({k: tr[k] for k in ("cx", "cy", "heightmap", "size", "squareSize", "zBase",
-                                                   "maxHeight", "q", "ter")}, 128.0, -128.0)
+                                                   "maxHeight", "q", "ter", "bid")}, 128.0, -128.0)
         self.assertEqual(h.shape, (1024, 1024))
         self.assertEqual(conn.pending_block, ff.Block(128.0, -128.0, 1024))
         self.assertEqual(conn.pending_block.bbox, (-384.0, -640.0, 640.0, 384.0))
