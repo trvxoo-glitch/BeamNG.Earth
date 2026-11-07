@@ -47,6 +47,7 @@ import http.client
 import json
 import logging
 import os
+import staging
 import random
 import ssl
 import threading
@@ -1290,7 +1291,7 @@ class Fetcher:
             tmp = f"{path}.{threading.get_ident()}.tmp"
             with open(tmp, "w") as f:
                 json.dump({"date": self._date, "hosts": self.snapshot()}, f, indent=1, sort_keys=True)
-            os.replace(tmp, path)
+            staging.replace_retry(tmp, path)
         except OSError as e:
             log.warning("net: could not write the request statistics: %s", e)
 
