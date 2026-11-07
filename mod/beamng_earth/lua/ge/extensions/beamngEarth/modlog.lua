@@ -12,6 +12,9 @@
 local M = {}
 
 M.REPEAT_MAX = 3
+-- areas whose I lines go to the server too: few, and the ones a multiplayer problem is read from (who joined, which
+-- anchor, the plugin's answers); the rest of the mod's I lines stay in beamng.log
+M.INFO_AREAS = { mpsession = true, beammp = true, mpanchor = true }
 M.REPEAT_S = 60
 M.MAX_QUEUE = 60
 M.MAX_CHARS = 600
@@ -44,7 +47,8 @@ local function shape(s) return (s:gsub('%-?%d+%.?%d*', '#')):sub(1, 120) end
 function M.note(level, tag, text)
   local area = M.area(tag)
   if not area then return end
-  if level ~= 'W' and level ~= 'E' and not (level == 'D' and M.debugOn(area)) then return end
+  if level ~= 'W' and level ~= 'E' and not (level == 'D' and M.debugOn(area))
+    and not (level == 'I' and M.INFO_AREAS[area]) then return end
   text = tostring(text or ''):gsub('\n', ' ')
   if #text > M.MAX_CHARS then text = text:sub(1, M.MAX_CHARS) .. '...' end
   local now = M.now()

@@ -34,6 +34,7 @@ earthd's "share" / "peers" messages and share_port, the plugin's sharing port an
 and the group parts of SharedFarPool stay, unused; the helpers (--peers, BNGE_PEERS) work as before.
 """
 import argparse
+import logsetup
 import hashlib
 import io
 import json
@@ -779,7 +780,8 @@ class SharedFarPool:
             try:
                 head, blobs = conn.call(dict(header, group=True, cached=True))
                 q.put(conn)
-            except Exception:
+            except Exception as e_fb:
+                logsetup.fallback("earthd.peerwork", "a peer's cached block call failed: connection closed", e_fb)
                 conn.close()
                 q.put(conn)
                 with self.lock:

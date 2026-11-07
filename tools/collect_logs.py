@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Collect everything a bug report needs into one zip, with your user name, home folder and any key or token values
-hidden.
+hidden. (The packaged app does the same: BeamNG.Earth.exe --collect-logs, or the in-game report's "Add logs" button.)
 
   python3 tools/collect_logs.py                         -> beamng-earth-logs-<time>.zip in the current folder
   python3 tools/collect_logs.py --user-dir "C:/Users/me/AppData/Local/BeamNG.drive/current" -o bug.zip
 
-It holds server.log and its two earlier runs, launcher.log, the game's beamng.log (when --user-dir is given or
-found), the in-game reports, and SUMMARY.txt (tools/logdigest.py's summary of server.log). Nothing is sent anywhere.
+It holds every server.log run, launcher.log, the crash files and the latest minidumps, the game's beamng.log, the
+profiler's snapshot and hitch captures, the newest in-game reports, app.json, a list of the session folder, and
+SUMMARY.txt (tools/logdigest.py's summary of server.log). Nothing is sent anywhere.
 """
 import argparse
-import glob
 import os
-import platform
 import sys
 import time
 
@@ -23,17 +22,16 @@ import logtools  # noqa: E402
 
 def find_user_dir():
     import apppaths
-    cands = []
+    saved = getattr(apppaths, "saved_user_dir", None)
+    cands = [saved()] if callable(saved) else []
     if apppaths.IS_WIN:
         base = os.environ.get("LOCALAPPDATA") or ""
-        cands.append(os.path.join(base, "BeamNG", "BeamNG.drive", "current"))
-        cands.append(os.path.join(base, "BeamNG.drive", "current"))
+        cands += [os.path.join(base, "BeamNG", "BeamNG.drive", "current"), os.path.join(base, "BeamNG.drive", "current")]
     else:
         home = os.path.expanduser("~")
-        cands += [os.path.join(home, ".local", "share", "BeamNG.drive", "current"),
-                  os.path.join(home, ".steam", "steam", "steamapps", "compatdata", "284160", "pfx", "drive_c", "users",
-                               "steamuser", "AppData", "Local", "BeamNG", "BeamNG.drive", "current")]
-    return next((c for c in cands if os.path.isdir(c)), None)
+        cands += [os.path.join(home, ".local", "share", "BeamNG", "BeamNG.drive", "current"),
+                  os.path.join(home, ".local", "share", "BeamNG.drive", "current")]
+    return next((c for c in cands if c and os.path.isdir(c)), None)
 
 
 def main(argv=None):
@@ -42,27 +40,10 @@ def main(argv=None):
     ap.add_argument("-o", "--out")
     ap.add_argument("--user-dir", help="the game's user folder (the one with beamng.log)")
     a = ap.parse_args(argv)
-    logs = os.path.join(apppaths.data_dir(), "logs")
-    files = []
-    for p in sorted(glob.glob(os.path.join(logs, "*.log*"))):
-        files.append((p, "logs/" + os.path.basename(p)))
-    ud = a.user_dir or find_user_dir()
-    if ud:
-        files.append((os.path.join(ud, "beamng.log"), "game/beamng.log"))
-        for p in sorted(glob.glob(os.path.join(ud, "beamngEarth", "reports", "*")))[-10:]:
-            if os.path.isfile(p):
-                files.append((p, "game/reports/" + os.path.basename(p)))
-    summary = []
-    try:
-        with open(os.path.join(logs, "server.log"), encoding="utf-8", errors="replace") as f:
-            summary = logtools.digest(f.read().splitlines())
-    except OSError:
-        summary = ["no server.log in " + logs]
-    info = ["collected %s" % time.strftime("%Y-%m-%d %H:%M:%S"), "platform: %s" % platform.platform(),
-            "python: %s" % sys.version.split()[0], "game user folder: %s" % (ud or "not found (use --user-dir)"), ""]
+    dd = apppaths.data_dir()
     out = a.out or "beamng-earth-logs-%s.zip" % time.strftime("%Y%m%d-%H%M%S")
-    names = logtools.bundle(out, files, {"SUMMARY.txt": "\n".join(info + summary) + "\n"})
-    print("wrote %s: %s" % (out, ", ".join(names)))
+    names = logtools.collect(out, os.path.join(dd, "logs"), a.user_dir or find_user_dir(), dd)
+    print("wrote %s (%d files)" % (out, len(names)))
     return 0
 
 

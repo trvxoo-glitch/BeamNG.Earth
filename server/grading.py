@@ -2287,7 +2287,8 @@ class _Planner:
         lon0, lat0, lon1, lat1 = key.bounds()
         try:
             return bool(dem.coarse_at((lat0 + lat1) / 2, (lon0 + lon1) / 2))
-        except Exception:
+        except Exception as e_fb:
+            logsetup.fallback("earthd.grading", "the coarse DEM check failed: taken as fine data", e_fb)
             return False
 
     def _coarse_ll(self, lonlat):
@@ -2298,7 +2299,8 @@ class _Planner:
         lon, lat = np.asarray(lonlat, np.float64)[len(lonlat) // 2][:2]
         try:
             return bool(dem.coarse_at(float(lat), float(lon)))
-        except Exception:
+        except Exception as e_fb:
+            logsetup.fallback("earthd.grading", "the coarse DEM check failed: taken as fine data", e_fb)
             return False
 
     def _ease_coarse(self, key, plans, pspecs):

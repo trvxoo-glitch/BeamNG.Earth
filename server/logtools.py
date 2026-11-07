@@ -157,6 +157,67 @@ def scrub(text, user=None, home=None):
     return text
 
 
+BINARY = (".dmp", ".mdmp", ".jpg", ".png")      # copied as they are (not scrubbed: no text in them to read)
+DUMPS_IN_BUNDLE = 2
+
+
+def collect(out, logs_dir, user_dir=None, app_dir=None, now=None):
+    """The bug report bundle (tools/collect_logs.py, the launcher's --collect-logs, the in-game report's button):
+    every server.log run and launcher.log, the crash files and the latest minidumps, the game's beamng.log, the
+    profiler's snapshot and the hitch captures, the newest in-game reports, the app's remembered settings (app.json)
+    and a list of the session folder, plus SUMMARY.txt (the digest of the latest server.log). Returns the names."""
+    import glob
+    import json
+    import platform
+    import sys
+    import time
+    files = []
+    for p in sorted(glob.glob(os.path.join(logs_dir, "*.log*")) + glob.glob(os.path.join(logs_dir, "crash-*.txt"))):
+        files.append((p, "logs/" + os.path.basename(p)))
+    dumps = sorted(glob.glob(os.path.join(logs_dir, "dumps", "*.dmp")), key=os.path.getmtime)[-DUMPS_IN_BUNDLE:]
+    files += [(p, "logs/dumps/" + os.path.basename(p)) for p in dumps]
+    extra = {}
+    if user_dir:
+        files.append((os.path.join(user_dir, "beamng.log"), "game/beamng.log"))
+        files.append((os.path.join(user_dir, "settings", "beamngEarth-profiler.json"), "game/profiler-snapshot.json"))
+        for p in sorted(glob.glob(os.path.join(user_dir, "beamngEarth", "hitches", "*.json")))[-5:]:
+            files.append((p, "game/hitches/" + os.path.basename(p)))
+        reports = sorted(glob.glob(os.path.join(user_dir, "beamngEarth", "reports", "*", "")))[-3:]
+        for d in reports:
+            for p in sorted(glob.glob(os.path.join(d, "*")))[:12]:
+                if os.path.isfile(p):
+                    files.append((p, "game/reports/%s/%s" % (os.path.basename(d.rstrip("/\\")), os.path.basename(p))))
+        sess = os.path.join(user_dir, "temp", "beamngEarth")
+        rows = []
+        for d, _dirs, names in os.walk(sess):
+            for n in names[:4000]:
+                try:
+                    rows.append("%10d  %s" % (os.path.getsize(os.path.join(d, n)), os.path.relpath(os.path.join(d, n), sess)))
+                except OSError:
+                    pass
+            if len(rows) > 20000:
+                break
+        if rows:
+            extra["game/session-files.txt"] = "\n".join(rows) + "\n"
+    if app_dir:
+        try:
+            with open(os.path.join(app_dir, "app.json"), encoding="utf-8") as f:
+                extra["app.json"] = json.dumps(json.load(f), indent=2)
+        except (OSError, ValueError):
+            pass
+    summary = []
+    try:
+        with open(os.path.join(logs_dir, "server.log"), encoding="utf-8", errors="replace") as f:
+            summary = digest(f.read().splitlines())
+    except OSError:
+        summary = ["no server.log in " + logs_dir]
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+    info = ["collected %s" % when, "platform: %s" % platform.platform(), "python: %s" % sys.version.split()[0],
+            "game user folder: %s" % (user_dir or "not known"), ""]
+    extra["SUMMARY.txt"] = "\n".join(info + summary) + "\n"
+    return bundle(out, files, extra)
+
+
 def bundle(dest, files, extra=None, user=None, home=None, max_bytes=8 * 1024 * 1024):
     """Write a zip of the log files (path -> name inside), each scrubbed and cut to its last max_bytes, plus a
     SUMMARY.txt (the digest of server.log) and the extra {name: text} given. Returns the names written."""
@@ -170,6 +231,10 @@ def bundle(dest, files, extra=None, user=None, home=None, max_bytes=8 * 1024 * 1
                     f.seek(max(0, size - max_bytes))
                     raw = f.read()
             except OSError:
+                continue
+            if name.lower().endswith(BINARY):
+                z.writestr(name, raw)
+                names.append(name)
                 continue
             text = scrub(raw.decode("utf-8", "replace"), user, home)
             if size > max_bytes:

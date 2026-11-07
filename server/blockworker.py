@@ -14,6 +14,7 @@ lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
 from runtimeprofiler import step as profile_step
 import logging
+import logsetup
 import os
 import queue
 import threading
@@ -658,7 +659,8 @@ def _where_enu(lat, lon, x0, y0, x1, y1, **settings):
                                       np.zeros(4))
         la, lo = np.asarray(la, float), np.asarray(lo, float)
         return revisit.where(lat, lon, la.min(), lo.min(), la.max(), lo.max(), revisit.sig(**settings))
-    except Exception:
+    except Exception as e_fb:
+        logsetup.fallback("earthd.blockworker", "a revisit's frame could not be made: no revisit check", e_fb)
         return None
 
 

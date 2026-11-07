@@ -254,6 +254,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
         cmd += ["--telemetry", "on"]
     env = dict(os.environ)
     env["BNGE_LOG_DIR"] = os.path.dirname(os.path.abspath(log_path))    # each process's crash dump (logsetup)
+    crash_dumps_on(env["BNGE_LOG_DIR"])     # (Windows: a native crash's minidump too)
     env.setdefault("RUST_BACKTRACE", "1")       # a panic in the native module (earthfast) logs where it was
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
@@ -277,6 +278,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
         kw.update(stdout=out, stderr=subprocess.STDOUT)
         proc = subprocess.Popen(cmd, **kw)
     proc.bnge_log = log_path        # (stop_server: the exit record when the launcher stops it)
+    proc.bnge_t0 = time.time()      # (the exit record: this run's minidumps)
     threading.Thread(target=echo_server_log, args=(log_path, proc), daemon=True).start()
     return proc
 
@@ -303,20 +305,38 @@ def echo_lines(lines, state):
     return out
 
 
-def keep_previous_log(path, keep=2):
+LOG_KEEP_RUNS = 10              # server.log.1 .. .10: the runs before this one
+LOG_KEEP_BYTES = 40 * 1024 * 1024   # ... while they come to this much at most (the oldest go first)
+
+
+def keep_previous_log(path, keep=LOG_KEEP_RUNS, max_bytes=LOG_KEEP_BYTES):
     """The last runs' logs as server.log.1 .. .<keep> (GitHub #687: a crashed session's log, with Python's fatal error
-    dump, was overwritten by the next start before the player could attach it)."""
+    dump, was overwritten by the next start before the player could attach it). Up to keep runs while they total at
+    most max_bytes (two runs were kept: a crash three starts back was gone by the time it was asked for)."""
     try:
         if not os.path.isfile(path) or os.path.getsize(path) == 0:
             return
-        for i in range(keep, 1, -1):
-            older = f"{path}.{i - 1}"
+        for i in range(keep, 0, -1):
+            older = f"{path}.{i}"
             if os.path.isfile(older):
-                os.replace(older, f"{path}.{i}")
+                if i == keep:
+                    os.remove(older)
+                else:
+                    os.replace(older, f"{path}.{i + 1}")
         os.replace(path, path + ".1")
+        total = 0
+        for i in range(1, keep + 1):
+            p = f"{path}.{i}"
+            if not os.path.isfile(p):
+                break
+            total += os.path.getsize(p)
+            if total > max_bytes and i > 1:
+                for j in range(i, keep + 1):
+                    if os.path.isfile(f"{path}.{j}"):
+                        os.remove(f"{path}.{j}")
+                break
     except OSError:
         pass                    # (still open somewhere on Windows: overwritten as before)
-
 
 def exit_line(code, now=None, why=None):
     """The record the launcher adds to server.log when the server ends (a log that just stops said nothing about
@@ -336,8 +356,12 @@ def exit_line(code, now=None, why=None):
     return "%s INFO launcher: server process exited with code %s (%s)" % (now.strftime("%Y-%m-%d %H:%M:%S,%f")[:23], code, how)
 
 
-def note_server_exit(path, code, why=None):
-    """The exit record, after the native crash dumps the server's processes left (logsetup.sweep_crashes)."""
+def note_server_exit(path, code, why=None, since=None):
+    """The exit record, after the native crash dumps the server's processes left (logsetup.sweep_crashes) and the
+    minidumps Windows kept of them (crash_dumps_on)."""
+    dumps = new_dumps(os.path.dirname(os.path.abspath(path)), since if since is not None else time.time() - 6 * 3600)
+    if dumps:
+        why = (why + "; " if why else "") + "minidumps of this run: " + ", ".join(os.path.basename(p) for p in dumps)
     try:
         import logging
         sys.path.insert(0, os.path.join(ROOT, "server"))
@@ -372,7 +396,7 @@ def echo_server_log(path, proc):
                 if not lines:
                     if proc.poll() is not None:
                         if not getattr(proc, "bnge_stopping", False):     # (stop_server writes its own)
-                            note_server_exit(path, proc.returncode)
+                            note_server_exit(path, proc.returncode, since=getattr(proc, "bnge_t0", None))
                         return
                     time.sleep(0.5)
     except OSError:
@@ -462,6 +486,42 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
 
 
 CRASH_DUMP_EXT = (".dmp", ".mdmp")
+DUMPS_DIR = "dumps"             # <logs>/dumps: Windows' minidumps of this app's crashed processes (crash_dumps_on)
+DUMPS_KEEP = 3
+WER_KEY = r"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+
+
+def crash_dumps_on(log_dir, exe=None, winreg=None):
+    """Windows: ask Windows Error Reporting to keep a minidump when this app's processes crash (the server, its
+    workers: the same exe), in <logs>/dumps, the last DUMPS_KEEP. faulthandler's text dump has the Python stacks only;
+    a crash on a native thread (the -e run's road tile worker) needs the native frames, which only a minidump holds.
+    Only a crash nothing handled makes one (not the exceptions the native code catches). Per user and per exe name,
+    under HKEY_CURRENT_USER (no administrator); BNGE_CRASH_DUMPS=0 leaves it off. Returns the folder, or None."""
+    if not IS_WIN or os.environ.get("BNGE_CRASH_DUMPS", "").strip() == "0":
+        return None
+    exe = os.path.basename(exe or sys.executable)
+    folder = os.path.join(log_dir, DUMPS_DIR)
+    try:
+        if winreg is None:
+            import winreg
+        os.makedirs(folder, exist_ok=True)
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, WER_KEY + "\\" + exe, 0, winreg.KEY_SET_VALUE) as k:
+            winreg.SetValueEx(k, "DumpFolder", 0, winreg.REG_EXPAND_SZ, folder)
+            winreg.SetValueEx(k, "DumpCount", 0, winreg.REG_DWORD, DUMPS_KEEP)
+            winreg.SetValueEx(k, "DumpType", 0, winreg.REG_DWORD, 1)        # a minidump (stacks, modules)
+        return folder
+    except (OSError, ImportError, AttributeError):
+        return None
+
+
+def new_dumps(log_dir, since):
+    """The minidumps Windows wrote for this app since a time (crash_dumps_on), newest first."""
+    d = os.path.join(log_dir, DUMPS_DIR)
+    try:
+        got = [os.path.join(d, f) for f in os.listdir(d) if f.lower().endswith(CRASH_DUMP_EXT)]
+        return sorted((p for p in got if os.path.getmtime(p) >= since), key=lambda p: -os.path.getmtime(p))
+    except OSError:
+        return []
 
 
 def game_crash_files(user_dir, since, depth=2):
@@ -527,7 +587,8 @@ def stop_server(proc, why=None):
         except (OSError, subprocess.TimeoutExpired):
             pass
     if getattr(proc, "bnge_log", None):      # (the kill leaves the server no time to say so: the launcher does)
-        note_server_exit(proc.bnge_log, proc.poll(), why="stopped by the launcher: " + (why or "the game closed or the launcher ended"))
+        note_server_exit(proc.bnge_log, proc.poll(), why="stopped by the launcher: " + (why or "the game closed or the launcher ended"),
+                         since=getattr(proc, "bnge_t0", None))
 
 
 # --- the game -------------------------------------------------------------------------------------
@@ -1448,6 +1509,25 @@ def linux_build(force=None):
     return "native", native
 
 
+def collect_logs(argv=()):
+    """BeamNG.Earth --collect-logs [path.zip]: every log, crash file and minidump, the game's log and reports, in one
+    zip with the user's name and secrets hidden (logtools.collect), on the desktop unless a path is given. The
+    packaged app has no Python for players to run tools/collect_logs.py with."""
+    sys.path.insert(0, os.path.join(ROOT, "server"))
+    import logtools
+    dd = data_dir()
+    out = argv[0] if argv else os.path.join(
+        next((d for d in (os.path.join(os.path.expanduser("~"), "Desktop"), dd) if os.path.isdir(d)), dd),
+        "beamng-earth-logs-%s.zip" % time.strftime("%Y%m%d-%H%M%S"))
+    try:
+        ud = user_folder()
+    except Exception:
+        ud = None
+    names = logtools.collect(out, os.path.join(dd, "logs"), ud, dd)
+    _out(f"Logs collected: {out} ({len(names)} files). Attach it to your bug report; nothing was sent anywhere.")
+    return 0
+
+
 def user_folder():
     import install
     # (first the folder the game itself said it uses, when it ever differed from ours: the world server saves it,
@@ -1633,6 +1713,8 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--server":
         run_server(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "--collect-logs":   # one zip for a bug report (logtools.collect)
+        raise SystemExit(collect_logs(sys.argv[2:]))
     if hand_over():
         return
     ap = argparse.ArgumentParser(description="Start the BeamNG.Earth world server and BeamNG.drive.")

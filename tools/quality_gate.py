@@ -23,7 +23,7 @@ MODULES = (
     "test_sketchfab_assets",
     "test_worldbundle", "test_world_cache", "test_peerwork",
     "test_host_package", "test_carriageway_solver", "test_logsetup", "test_gradelog", "test_groundprobe",
-    "test_logtools", "test_gamelog",
+    "test_logtools", "test_gamelog", "test_logcalls", "test_diagnostics",
 )
 
 

@@ -16,6 +16,7 @@ pure function of the cached land cover and the heights, so a block rebuilt from 
 the same every time.
 """
 import hashlib
+import logsetup
 from runtimeprofiler import step as profile_step
 import logging
 import math
@@ -1505,7 +1506,8 @@ def roads_near(feats_list, lat, lon, radius_m=25.0, widths=None, limit=3):
             continue
         try:
             specs = roadsmod.road_specs(f, None, widths)
-        except Exception:               # (without widths' help: the specs' defaults)
+        except Exception as e_fb:               # (without widths' help: the specs' defaults)
+            logsetup.fallback("earthd.surface", "a road's widths failed: painted with the default widths", e_fb)
             specs = roadsmod.road_specs(f, None, None)
         cls = f.attrs.get("class")
         for i in range(len(f)):

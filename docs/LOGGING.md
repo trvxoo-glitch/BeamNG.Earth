@@ -7,11 +7,15 @@ flooding the log. Players send these files with a bug report. Developers read th
 
 | File | Written by | Where |
 | --- | --- | --- |
-| `server.log` (+ `.1`, `.2`: the two runs before) | the world server and its worker processes, plus the game's `game: ...` lines | `<data dir>/logs/` (Windows `%LOCALAPPDATA%\beamng-earth\logs`, Linux `~/.cache/beamng-earth/logs`) |
+| `server.log` (+ `.1` .. `.10`: the runs before, 40 MB at most) | the world server and its worker processes, plus the game's `game: ...` lines | `<data dir>/logs/` (Windows `%LOCALAPPDATA%\beamng-earth\logs`, Linux `~/.cache/beamng-earth/logs`) |
 | `launcher.log` | the launcher | the same folder |
 | `beamng.log` | the game, including the mod's `beamngEarth` lines | the game's user folder (`.../BeamNG.drive/current/beamng.log`) |
 | session folder | the tiles, blocks and meshes the server made for the game | the game's user folder, `temp/beamngEarth/` |
 | reports | the in-game report tool (Ctrl+Shift+E) and profiler (Ctrl+Shift+Y) | the game's user folder, `beamngEarth/reports/` |
+| `crash-<role>-<pid>.txt` | each server process: a native crash's stacks (read into `server.log`, then removed) | the logs folder |
+| `dumps/*.dmp` | Windows Error Reporting: a minidump of a crashed server process (the native frames) | the logs folder |
+| hitch captures | the mod: the last 10 s of frames around a hitch of 1 s or more (hitchcap.lua) | the game's user folder, `beamngEarth/hitches/` |
+| profiler snapshot | the profiler window's Export | the game's user folder, `settings/beamngEarth-profiler.json` |
 
 The mod's own lines go to both `beamng.log` and `server.log`, so `server.log` alone usually tells the whole story. In
 `server.log` they start with `game:`.
@@ -64,6 +68,13 @@ INFO earthd: game hello: mod 0.4.0, protocol 4, format 4
 - A crash file with only its header line is a process that was killed. A normal exit removes its file. When the
   launcher stops the server (the game closed), it reads the crash files and writes
   `server process exited ... (stopped by the launcher: ...)` itself, because the kill gives the server no time to.
+- **Minidumps.** At its start the launcher asks Windows Error Reporting to keep a minidump when one of its processes
+  crashes, in `logs/dumps/` (the last 3). This is a per-user setting for this exe's name only (`HKEY_CURRENT_USER\
+  Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\<exe>`), and needs no administrator.
+  `BNGE_CRASH_DUMPS=0` leaves it alone. A minidump holds the native frames that faulthandler's text cannot: open it in
+  WinDbg or Visual Studio with the matching build's `earthfast.pdb`. The server logs `native crash: Windows kept a
+  minidump, ...` when one appears, and the exit record names this run's dumps. Only a crash that nothing handled
+  makes one, so it also tells a real crash from an exception the native code caught.
 - **How a run ended**: see "Reading a log" below.
 - A block, road tile or far tile still building after a while logs its worker's stacks (blockworker `_stack_watch`).
   A late heartbeat logs the main thread's stack (`earthd` lag report).
@@ -132,6 +143,24 @@ errors always pass. The rest of a capped minute is counted, and the logger's nex
 `log cap: earthd.<area> held back N lines in a minute`. Three runs are kept and players send files of a few hundred
 KB, so one area stuck in a loop used to push everything else out. `BNGE_LOG_CAP=0` turns the cap off.
 
+## Health, settings and blocks (`earthd.health`, `settings:`, `block ... b<n>:`)
+
+```
+INFO earthd.health: health: server 812 MB; pools blocks 2/4 +3 queued, road tile 1/2, ...; workers 9 using 3.1 GB (largest 690 MB); restarts road tile 1; event loop busy 7 %; disk 112 GB free (cache); games 1; fallbacks 4
+INFO earthd: settings: graphics: photoPx 2048 (was 1024)
+INFO earthd: block (1, 512, 1024) b17: built 2.3 s after its request, committed 0.8 s after it was sent (swap 11 ms)
+```
+
+- **health** (health.py), every minute: each process's resident memory (the server's own, the worker processes' sum
+  and the largest), each pool's busy workers and queue, the pools made again after a worker died, how much of the
+  minute the event loop was busy, the cache folder's free disk, the games connected, the fallbacks taken. A leak
+  shows as a rising number across the lines, a stall as a busy share near 100 %, a growing queue before it.
+- **settings**: what the player changed on the settings page (and the profiler switch), each time it differs from
+  the last on that connection, with its old value. The first one of each kind is logged in full.
+- **block pipeline**: each block sent carries an id (`bid`). When the game commits it, the server logs how long it
+  took to build after the request and how long it waited for the commit. A long wait is normal for a block sent ahead
+  of the car (it waits for the car). The game's own `ground block` line gives its swap or import time.
+
 ## The mod's own warnings and errors (`earthd.game.<area>`, modlog.lua)
 
 Every `log('W'|'E', 'beamngEarth...', ...)` the mod writes also goes to `server.log`, at its own level, under the
@@ -140,6 +169,8 @@ logger `earthd.game.<area>`. The area is the tag after `beamngEarth.`, or `core`
 with its numbers made alike, is sent at most 3 times a minute; the next one carries `(+N more like this before)`.
 The mod's `D` lines are sent only for the areas the server's `BNGE_DEBUG` names (the server's hello passes it on) or
 from the game's console: `beamngEarth_core._modlog.setDebug('roads,trees')` (`'all'` for every area).
+The multiplayer modules' `I` lines go too (mpsession, beammp, mpanchor: who joined, which anchor, the plugin's
+answers), since a BeamMP problem is read from them.
 
 ## Graded roads: humps and rail crossings (`earthd.grading`, gradelog.py)
 
@@ -221,9 +252,46 @@ python3 tools/collect_logs.py [--user-dir <the game's user folder>] [-o bug.zip]
 - **How a run ended.** A normal stop logs `shutdown: server process ending normally after N s`. The launcher then adds
   `launcher: server process exited with code N (normal | killed by signal | crashed (Windows status 0x...) | failed)`.
   A log with neither stopped without a trace: a hard kill, a power loss, or a build from before this was added.
-- **The bundle** holds server.log and the two runs before it, launcher.log, the game's beamng.log and recent reports,
-  and SUMMARY.txt. Your user name, home folder and the value after any name containing key, token, secret, password,
-  cookie or auth are hidden. Each file is cut to its last 8 MB. Nothing is sent anywhere: attach the zip yourself.
+- **The bundle** (logtools.collect) holds every server.log run, launcher.log, the crash files and the two newest
+  minidumps, the game's beamng.log, the profiler snapshot, the newest hitch captures and in-game reports, app.json,
+  a list of the session folder's files, and SUMMARY.txt. Your user name, home folder and the value after any name
+  containing key, token, secret, password, cookie or auth are hidden in the text files. Each file is cut to its last
+  8 MB. Nothing is sent anywhere: attach the zip yourself. Three ways to make it:
+  - in the game: the report window (Ctrl+Shift+E) shows **Add logs** after you save, and the zip goes into that
+    report's folder beside issue.md;
+  - the packaged app: `BeamNG.Earth.exe --collect-logs [path.zip]` (on the desktop by default);
+  - from the code: `python3 tools/collect_logs.py`.
+
+## Profiling: hitch captures, timelines, baselines
+
+- **Hitch captures** (hitchcap.lua). The mod always keeps the last 10 s of frame times (the profiler window does
+  this only while it is open), and the mod's parts for each frame of 50 ms or more. A frame of 1 s or more saves,
+  2 s later, `beamngEarth/hitches/hitch_<date>_<time>.json`: every frame of the last 10 s, the hitch's engine
+  subsystems and GPU time, where the player was and what the mod was doing. At most one a minute, the newest 10
+  kept, and `server.log` gets `perf capture of the N ms hitch saved: ...`.
+- **GPU time** is in each hitch line (`| gpu 14.2 ms (CPU waited 9.8 ms for it)`) when the engine reports it. So a
+  hitch "mostly outside the mod and engine timers" can be told apart as the GPU's.
+- **Timelines** (`tools/profile_trace.py`, tracefmt.py): `python3 tools/profile_trace.py server.log hitch_....json
+  beamngEarth-profiler.json -o trace.json`, then open trace.json in https://ui.perfetto.dev or chrome://tracing.
+  From server.log: the game's hitches, the event loop's stalls, each block's build and its wait for the commit,
+  warnings and errors as markers, memory from the health lines as a graph. From a capture: every frame, with the
+  slow ones named by their biggest mod part. From the profiler's Export: every worker job on its pool's track, with
+  its queue wait before it and its steps.
+- **Baselines** (`tools/perfbase.py`, perfbase.py): `python3 tools/perfbase.py server.log --save base.json` keeps a
+  run's numbers: fps and 1 % low, hitches a minute and the worst, event loop stall time, block build median and
+  95th percentile, the server's memory. Later, `--compare base.json` prints each one, `WORSE` past its threshold,
+  and exits with status 1. Drive the same route on both builds for a fair comparison (`tools/autodrive_perf.py
+  --from ... --to ...`).
+- The live profiler window (docs/RUNTIME_PROFILER.md) is unchanged: its Export is what profile_trace.py reads.
+
+## For developers adding code
+
+- Log through `logging.getLogger("earthd.<area>")` in the server, and `log('I'|'W'|'E'|'D', 'beamngEarth', ...)` in
+  the mod. Never `print` in a server module: `server.log` is the server's stdout, and a print has no time, level or
+  area. `server/tests/test_logcalls.py` fails on a new print and on a log call whose placeholders don't match its
+  arguments (logging only reports that when the line is written, and drops the line).
+- A broad `except` that carries on calls `logsetup.fallback(log, "what is assumed", exc)`.
+- A new message type is added to `server/tests/test_protocol_agreement.py` on its side.
 
 ## Where to look first
 
@@ -235,6 +303,12 @@ python3 tools/collect_logs.py [--user-dir <the game's user folder>] [-o bug.zip]
 | A paved road drives like dirt | the `ground block` and `wheels:` lines near the place, then `ground files` and the nearest-roads line |
 | Something slow on the server | `slow code` and lag reports; `--debug` the area it names |
 | A message the game or server ignores | `game hello` (versions), then warnings by how often |
+| The game crashed | the exit record (`stopped by the launcher: the game closed; ... crash dump`), then `earthd.gamelog` errors before it |
+| A worker process died | `native crash` (which process, which thread), `dumps/` (a minidump), `pool made again` |
+| Memory grows or the server slows over a session | the `health:` lines one after another; `tools/profile_trace.py` draws them |
+| A block took long to appear | `terrain_ready ... after` and its `block ... b<n>:` line; the game's `ground block` line |
+| Something got slower in a new build | `tools/perfbase.py --compare` on the same route |
+| Multiplayer | `earthd.game.mpsession` lines, `share:` lines |
 
 ## BeamNG's own tools while developing
 

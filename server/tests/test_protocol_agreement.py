@@ -152,6 +152,10 @@ MOD_TO_SERVER = {
     "diag_log": {"lines": F((list, dict)), "t": F(NUM, OPT)},
     # the mod's own warnings, errors and asked-for debug lines (modlog.lua; additive): {l, a, m} each
     "mod_log": {"lines": F((list, dict)), "t": F(NUM, OPT)},
+    # the in-game report's "Add logs" button (report.lua; additive): the bug report zip into the report's folder
+    "collect_logs": {"dir": F(str, OPT)},
+    # a block the mod committed (core.lua's loadBlock; additive): the server's block pipeline line
+    "block_commit": {"bid": F(int), "ms": F(NUM, OPT), "method": F(str, OPT), "ok": F(bool, OPT)},
     # what the block's files say under the car where its tyres changed ground (diaglog.lua; Connection.ground_probe)
     "ground_probe": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "x": F(NUM), "y": F(NUM),
                      "from": F(str, OPT), "to": F(str, OPT)},
@@ -203,13 +207,14 @@ MOD_TO_SERVER = {
     "place_previews": {"places": F((list, dict))},
 }
 CAM = {"x", "y", "z", "fx", "fy", "fz", "fovDeg", "h"}     # h: the screen height px (screen-space LOD)
-TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squareSize": F(NUM),
+TERRAIN = {"bid": F(int, OPT), "cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squareSize": F(NUM),
            "zBase": F(NUM), "maxHeight": F(NUM), "q": F(NUM),
            "layers": F(list, OPT), "materials": F(list, OPT),     # --surface on (surface.py)
            "base": F(str, OPT), "baseSize": F(NUM, OPT),           # --near-visual detail: the block's photo
            "ter": F(str, OPT),                                     # the block as a .ter (swapped in, no import)
            "partial": F(bool, OPT)}                                # built before its map cells (diaglog.lua's line)
 SERVER_TO_MOD = {
+    "logs_collected": {"ok": F(bool), "path": F(str, OPT), "files": F(int, OPT), "error": F(str, OPT)},   # collect_logs
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "share_info": {"code": F(str), "weight": F(NUM)},     # BeamMP sharing v2: our share code for the poses
     "share_out": {"to": F(str), "d": F(str)},             # ... a message for the plugin ("S") or a player
@@ -467,10 +472,10 @@ def top_keys(table):
 
 def mod_sends():
     """{type: (keys, nested)} of every net.send({...}) in core.lua, places.lua (the level select's pictures) and
-    mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua and spaceclouds.lua
+    mpsession.lua (require('beamngEarth/net').send), report.lua (its "Add logs"), and every send({...}) in terrainpatch.lua and spaceclouds.lua
     (core hands them net.send)."""
     out = {}
-    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua"), r"net(?:'\))?\.send\(\{"),
+    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "report.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
@@ -1070,6 +1075,10 @@ class ServerMessagesTest(test_server.ServerHarness):
         seen.extend(c.drain(0.3))                       # a commit changes no far tile: nothing to wait for
         c.send({"type": "prepare_terrain", "requestId": 3, "anchorId": 999, "cx": 0, "cy": 0})
         until(lambda m: m["type"] == "terrain_error")
+        # the report's "Add logs" (report.lua): the bug report zip into the report's folder
+        c.send({"type": "collect_logs", "dir": "beamngEarth/reports/test"})
+        got = until(lambda m: m["type"] == "logs_collected", 60)
+        self.assertTrue(got["ok"] and os.path.exists(os.path.join(self.tmp.name, got["path"].lstrip("/"))), got)
         # the ground's collision patch under another vehicle's island off the block (terrainpatch.lua / .py)
         c.send({"type": "terrain_patch", "anchorId": aid, "key": "t1", "x0": 900, "y0": -100, "x1": 1100, "y1": 100})
         patch = until(lambda m: m["type"] == "terrain_patch")

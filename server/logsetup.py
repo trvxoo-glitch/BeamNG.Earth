@@ -160,6 +160,12 @@ def fallback(logger, what, exc=None):
         pass
 
 
+def fallback_total():
+    """How many fallbacks this process took (the health line)."""
+    with _fallback_lock:
+        return sum(_fallbacks.values())
+
+
 def fallback_summary():
     """'fallbacks this run: earthd.grading road cell unreadable 41x, ...' or None."""
     with _fallback_lock:
@@ -188,6 +194,7 @@ _hooked = False
 LOG_DIR_ENV = "BNGE_LOG_DIR"       # the launcher's logs folder: each process's native-crash dump in its own file there
 CRASH_PREFIX = "crash-"
 _fault_fh = None
+_STARTED = time.time()
 _reported = {}        # crash file -> characters already reported (sweep_crashes: a process that carried on)
 
 
@@ -251,6 +258,17 @@ def sweep_crashes(log_dir=None, log=None):
     out = []
     if not d or not os.path.isdir(d):
         return out
+    dumps = os.path.join(d, "dumps")    # Windows' minidumps (the launcher's crash_dumps_on): named once each
+    try:
+        for name in sorted(os.listdir(dumps)):
+            p = os.path.join(dumps, name)
+            if name.lower().endswith((".dmp", ".mdmp")) and name not in _reported and os.path.getmtime(p) >= _STARTED:
+                _reported[name] = 1
+                log.critical("native crash: Windows kept a minidump, %s (%.1f MB): open it in WinDbg or Visual Studio "
+                             "with the matching build's symbols for the native frames", p, os.path.getsize(p) / 1e6)
+                out.append(name)
+    except OSError:
+        pass
     mine = "-%d.txt" % os.getpid()
     for name in sorted(os.listdir(d)):
         if not name.startswith(CRASH_PREFIX) or not name.endswith(".txt") or name.endswith(mine):

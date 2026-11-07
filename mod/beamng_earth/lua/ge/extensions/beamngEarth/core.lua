@@ -418,6 +418,10 @@ loadBlock = (function(raw)
         issues = issues }, st.clock or 0)
     end)
     if not okD then log('W', 'beamngEarth', 'diag log: ' .. tostring(errD)) end
+    if tr.bid and net.isConnected() then     -- (the server's block pipeline line: request -> built -> sent -> here)
+      pcall(function() net.send({ type = 'block_commit', bid = tr.bid, ms = math.floor(sw() + 0.5),
+        method = swapped and 'swap' or 'import', ok = ok == true }) end)
+    end
     return ok, err, swapped
   end
 end)(loadBlock)
@@ -1128,6 +1132,9 @@ local function onMessage(msg)
         .. '(' .. tostring(msg.game) .. ').' })
   elseif t == 'load_progress' then      -- the loading line's counts (server Connection.send_progress)
     st.loadProgress = msg
+  elseif t == 'logs_collected' then     -- the report's "Add logs" zip (report.lua, logtools.collect)
+    local rep = rawget(_G, 'beamngEarth_report')      -- (the extension: the window that asked)
+    if rep and rep.onLogsCollected then rep.onLogsCollected(msg) end
   elseif t == 'share_info' then        -- BeamMP shared generation v2: our share code and weight (mpsession poses)
     pcall(mpsession.onShareInfo, msg)
   elseif t == 'share_out' then         -- a share message for the group, through the plugin (mpshare.py)
@@ -2075,6 +2082,13 @@ local function noteHitch(frameMs)
       for i = 1, math.min(6, #arr) do h.engine[arr[i][1]] = math.floor(arr[i][2] * 10 + 0.5) / 10 end
     end
   end
+  local reg = rawget(_G, 'VariableRegistry')    -- (the GPU's part: a hitch the CPU timers do not explain)
+  if reg and reg.get then
+    local okG, g = pcall(reg.get, '$fps::gpuTime', -1)
+    local okW, wg = pcall(reg.get, '$fps::waitForGPU', -1)
+    if okG and type(g) == 'number' and g >= 0 then h.gpu = math.floor(g * 10 + 0.5) / 10 end
+    if okW and type(wg) == 'number' and wg >= 0 then h.waitGpu = math.floor(wg * 10 + 0.5) / 10 end
+  end
   hitches[#hitches + 1] = h
   if #hitches > M.HITCH_KEEP then table.remove(hitches, 1) end
   return h
@@ -2146,8 +2160,11 @@ local function perfMachine()
   end
   return out
 end
+M._hitchcap = require('beamngEarth/hitchcap')    -- the last seconds of frames, saved on a big hitch (hitchcap.lua)
 local function perfFrame(ms, hrec)
   local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine)
+  local okC, cap = pcall(M._hitchcap.frame, ms, st.clock, marks, hrec, perfContext)
+  if okC and cap then lines[#lines + 1] = cap end
   if not net.isConnected() then
     machineSent = false
   elseif not machineSent and st.clock >= (machineTryAt or 0) then

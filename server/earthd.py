@@ -86,6 +86,8 @@ import blockworker  # noqa: E402
 import logsetup  # noqa: E402
 import gamelog as gamelogmod  # noqa: E402
 import loopwatch  # noqa: E402
+import health as healthmod  # noqa: E402
+import logtools as logtoolsmod  # noqa: E402
 import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
@@ -305,6 +307,52 @@ PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_
 ANCHOR_PROGRESS_S = 2.0     # first ground: phase heartbeat, independent of the worker's optional tile counts
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
 PERF_LOG_LINES, PERF_LOG_CHARS = 40, 2000   # a perf_log message's lines and characters a line, at most
+# the messages that carry the player's choices (the settings page, the profiler's switch): logged when they change
+SETTINGS_KINDS = ("traffic_visuals", "highway_signs", "direction_signs", "graphics", "gas_stations", "cache",
+                  "app_path", "runtime_profiler")
+SETTINGS_SKIP = ("type", "probe", "requestId", "pick")      # (fields that change on every message)
+
+
+def settings_change(seen, msg):
+    """'graphics: photoPx 2048 (was 1024), trees off (was on)' when a settings message differs from the last of its
+    kind on this connection, the first one in full; None when nothing changed. seen: {kind: fields}, updated. Pure."""
+    kind = msg.get("type")
+    now = {k: v for k, v in msg.items() if k not in SETTINGS_SKIP and not isinstance(v, (dict, list))}
+    if kind == "cache" and now.get("clear"):
+        return "cache: cleared by the player"
+    before = seen.get(kind)
+    seen[kind] = now
+    if before == now:
+        return None
+    if before is None:
+        return f"{kind}: " + (", ".join(f"{k} {v!r}" for k, v in sorted(now.items())) or "on")
+    diffs = [f"{k} {now.get(k)!r} (was {before.get(k)!r})" for k in sorted(set(now) | set(before))
+             if now.get(k) != before.get(k)]
+    return f"{kind}: " + ", ".join(diffs)
+
+
+BIDS_KEEP = 256             # blocks sent whose commit can still be matched (Connection.terrain_msg's bid)
+
+
+def block_pipeline(sent, msg, now=None):
+    """'block (1, 512, 1024) b17: built 2.3 s after its request, committed 0.8 s after it was sent (swap 11 ms)'
+    for a block_commit (msg: bid, ms, method, ok); None for a bid this connection did not send. Pure but for now."""
+    try:
+        key, at, built_ms = sent.pop(int(msg.get("bid")))
+    except (KeyError, TypeError, ValueError):
+        return None
+    now = time.time() if now is None else now
+    parts = []
+    if built_ms is not None:
+        parts.append(f"built {built_ms / 1000:.1f} s after its request")
+    wait = now - at
+    parts.append(f"committed {wait:.1f} s after it was sent" + (" (it waits for the car)" if wait > 10 else ""))
+    ms, method = msg.get("ms"), str(msg.get("method") or "?")[:20]
+    what = f"{method} {float(ms):.0f} ms" if isinstance(ms, (int, float)) else method
+    return f"block {key} b{msg.get('bid')}: " + ", ".join(parts) + f" ({what})" + ("" if msg.get("ok", True) else
+                                                                                 ", FAILED in the game")
+
+
 GAME_LOG_POLL_S = 2.0       # the game's beamng.log read this often (gamelog.Follower)
 GAME_LATE_S = 2             # a game log batch read this much later than the game sent it: said on its lines
 HITCH_RE = re.compile(r"perf hitch (\d+) ms")
@@ -332,7 +380,7 @@ def hitch_server_side(line, msg, now=None, ring=None):
     return f"server during the {m.group(1)} ms hitch: {got}" if got else None
 
 
-MOD_LOG_LEVELS = {"W": logging.WARNING, "E": logging.ERROR, "D": logging.INFO}    # (a D line: asked for, so shown)
+MOD_LOG_LEVELS = {"W": logging.WARNING, "E": logging.ERROR, "D": logging.INFO, "I": logging.INFO}    # (a D line: asked for, so shown)
 SLOW_BASE_S = 3.0               # a base photo slower than this is logged with its stages
 BASE_RENDER_PX = 1024           # detail mode: the block's base photo as the imagery renders it (the 1 km block: 1 m a
                                 # texel; USGS is ~1.9 m, NAIP 0.6 m)
@@ -3482,7 +3530,8 @@ class Server:
         if not mine:
             try:
                 return fut.result(timeout=QUICK_SHARE_WAIT_S)
-            except Exception:
+            except Exception as e_fb:
+                logsetup.fallback(log, "a shared block from the group failed or was late: built here", e_fb)
                 return None
         try:
             name = make()
@@ -5578,6 +5627,29 @@ class Connection:
                 wait = 1.0
             await asyncio.sleep(min(wait if wait is not None else 0.05, max(0.005, tick_at - time.monotonic())))
 
+    async def collect_logs(self, msg):
+        """The bug report zip (logtools.collect) into the report's folder (msg.dir, under the game's user folder) or
+        the user folder's beamngEarth/; answered with logs_collected {ok, path (the game's path), files, error}."""
+        out = {"type": "logs_collected", "ok": False}
+        try:
+            ud = self.s.user_dir
+            rel = str(msg.get("dir") or "").replace("\\", "/").strip("/")
+            if not rel or ".." in rel.split("/"):
+                rel = "beamngEarth"
+            folder = os.path.join(ud, *rel.split("/"))
+            os.makedirs(folder, exist_ok=True)
+            name = "logs-%s.zip" % time.strftime("%Y%m%d-%H%M%S")
+            logs_dir = os.environ.get(logsetup.LOG_DIR_ENV) or os.path.join(_app_modules()[0].data_dir(), "logs")
+            app_dir = os.path.dirname(logs_dir)
+            names = await asyncio.get_running_loop().run_in_executor(
+                None, logtoolsmod.collect, os.path.join(folder, name), logs_dir, ud, app_dir)
+            out.update(ok=True, path=f"/{rel}/{name}", files=len(names))
+            log.info("logs collected for a report: %s (%d files)", os.path.join(folder, name), len(names))
+        except Exception as e:
+            out["error"] = f"{type(e).__name__}: {e}"[:200]
+            log.warning("collecting the logs failed: %s", out["error"])
+        self.send(out)
+
     def spawn(self, coro):
         if self.closing:
             coro.close()
@@ -5591,6 +5663,11 @@ class Connection:
         if getattr(self, "closing", False):
             return
         kind = msg["type"]
+        if kind in SETTINGS_KINDS:      # what the player switched, in the log (settings_change)
+            line = settings_change(getattr(self, "settings_seen", None) or self.__dict__.setdefault("settings_seen", {}),
+                                   msg)
+            if line:
+                log.info("settings: %s", line)
         if getattr(self, "lease", None) is None and kind in ("prepare_anchor", "commit_anchor", "prepare_terrain", "commit_terrain", "pose"):
             # (a client that skipped hello: a fresh lease, not resumable, and the request goes on as before PR #817;
             # the mod always says hello first on its connection, so its reconnect still resumes before any request)
@@ -5813,6 +5890,12 @@ class Connection:
                 logging.getLogger("earthd.game." + area).log(level, "game: %s%s%s", "debug: " if ln.get("l") == "D" else "",
                                                              ln["m"][:PERF_LOG_CHARS].replace("\n", " "),
                                                              game_lateness(msg))
+        elif kind == "block_commit":            # the mod committed a block we sent (core.lua's loadBlock)
+            line = block_pipeline(getattr(self, "bids_sent", {}), msg)
+            if line:
+                log.info("%s", line)
+        elif kind == "collect_logs":            # the in-game report's "Add logs": the bug report bundle (logtools)
+            self.spawn(self.collect_logs(msg))
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = road_tracker(self)
@@ -6040,8 +6123,15 @@ class Connection:
         except Exception as e:      # (diagnostics only)
             log.debug("ground files: roads near: %s: %s", type(e).__name__, e)
 
-    def terrain_msg(self, key, info):
-        out = {"cx": key[1], "cy": key[2], "heightmap": self.s.hm_vfs(key), "size": self.s.layout.block,
+    def terrain_msg(self, key, info, built_ms=None):
+        """A block for the mod. Its "bid" names this sending in the logs at both ends: the mod's block_commit answers
+        with it, and block_commit logs the block's way from the request to the game's commit (block_pipeline)."""
+        self.bid_n = getattr(self, "bid_n", 0) + 1
+        sent = self.__dict__.setdefault("bids_sent", collections.OrderedDict())
+        sent[self.bid_n] = (key, time.time(), built_ms)
+        while len(sent) > BIDS_KEEP:
+            sent.popitem(last=False)
+        out = {"bid": self.bid_n, "cx": key[1], "cy": key[2], "heightmap": self.s.hm_vfs(key), "size": self.s.layout.block,
                "squareSize": heightmap.SQUARE, "zBase": info["zBase"], "maxHeight": info["maxHeight"],
                "q": info["q"]}
         if info.get("layers"):      # --surface on: one mask per material, MATERIALS order
@@ -6275,8 +6365,9 @@ class Connection:
         self.terrain_wait -= 1
         key = (aid, cx, cy)
         self.s.hm_sent.append(key)
-        log.info("terrain_ready %s after %.0f ms", key, (time.perf_counter() - t0) * 1000)
-        self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info)})
+        built = (time.perf_counter() - t0) * 1000
+        log.info("terrain_ready %s after %.0f ms", key, built)
+        self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info, built)})
 
     async def provisional_follow(self, anchor, cx, cy, job):
         """A follow block's provisional stand-in (PROVISIONAL_FOLLOW_S): None when the graded block came in time (or
@@ -6305,7 +6396,8 @@ class Connection:
             if pf in done:
                 try:
                     planned = pf.result()
-                except Exception:
+                except Exception as e_fb:
+                    logsetup.fallback(log, "a block's road plans failed ahead: planned when built", e_fb)
                     pass
             else:
                 def slow_check(f, key=key, t=t_check):
@@ -7759,6 +7851,20 @@ async def main_async(args):
                 else:
                     glog.info("beamng.log   %s", text[:400])
     game_log_task = asyncio.create_task(game_log_watch())  # noqa: F841
+
+    async def health_watch():       # every minute: memory, pools, the loop, disk (health.py)
+        hlog = logging.getLogger("earthd.health")
+        while True:
+            await asyncio.sleep(healthmod.EVERY_S)
+            try:
+                fb = logsetup.fallback_total()
+                text = await asyncio.get_running_loop().run_in_executor(None, lambda: healthmod.line(
+                    poolsmod.ALL, args.cache_dir, loopwatch.RING, connections=len(server.connections),
+                    extra=(f"fallbacks {fb}" if fb else "",)))
+                hlog.info("health: %s", text)
+            except Exception as e:      # (never the reason the server stops)
+                logsetup.fallback(hlog, "the health line failed", e)
+    health_task = asyncio.create_task(health_watch())  # noqa: F841
     profile_task = asyncio.create_task(runtimeprofiler.stream(server))
 
     # Debug: event-loop stalls (every message the game sends waits for them). The loop beats; a thread

@@ -320,7 +320,8 @@ def _coarse_here(frame, box):
     try:
         la, lo, _ = frame.enu_to_geodetic(0.5 * (box[0] + box[2]), 0.5 * (box[1] + box[3]), 0.0)
         return bool(COARSE_AT(float(la), float(lo)))
-    except Exception:
+    except Exception as e_fb:
+        logsetup.fallback("earthd.railways", "the coarse DEM check under a railway failed: taken as fine", e_fb)
         return False
 
 

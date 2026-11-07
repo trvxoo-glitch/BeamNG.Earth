@@ -5,6 +5,17 @@ What changed in each release of BeamNG.Earth, newest first.
 ## Unreleased
 
 ### Added
+- **Profiling from saved runs** (docs/LOGGING.md): the mod keeps the last 10 seconds of frames and saves them when a
+  hitch of a second or more happens, so one bad hitch can be looked at afterwards. Hitch lines now include the GPU's
+  time. `tools/profile_trace.py` turns server.log, hitch captures and the profiler's export into one timeline for
+  Perfetto or chrome://tracing, and `tools/perfbase.py` saves a run's numbers and says what got worse in a later run.
+- **A health line every minute, settings changes and each block's way to the game in server.log**: memory per
+  process, worker queues and restarts, how busy the server was, free disk; what the player changed on the settings
+  page; and for each block, how long it took to build and to be committed in the game.
+- **One file for a bug report from the game or the app**: the report window's "Add logs" button, or
+  `BeamNG.Earth.exe --collect-logs`, zips every log, crash file and minidump, the game's log, hitch captures and the
+  latest reports, with personal details hidden. Windows keeps a minidump when a server process crashes, and the last
+  ten runs' logs are kept (up to 40 MB) instead of two.
 - **Game crashes, the game's errors and the server's side of a hitch in server.log** (docs/LOGGING.md): the exit
   record says whether the game left a crash dump or exited with an error code. The mod's extension errors that only
   reached beamng.log are copied in. Each game hitch of 500 ms or more is followed by what the server was doing during
